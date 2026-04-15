@@ -3,10 +3,6 @@ name    = "gnome-zones-daemon"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-name = "gnome_zones_daemon"
-path = "src/lib.rs"
-
 [[bin]]
 name = "gnome-zones-daemon"
 path = "src/main.rs"
