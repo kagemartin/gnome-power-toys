@@ -62,15 +62,13 @@ async fn main() -> crate::error::Result<()> {
         states.clone(),
     ));
 
-    // --- First-run hotkey registration ---
+    // --- Clear GNOME defaults that conflict with our accelerators. The
+    // extension's `Main.wm.addKeybinding` calls would otherwise fail to grab.
     {
         let db_guard = db.lock().await;
         if let Err(e) = hotkeys::stash_gnome_defaults(&db_guard) {
             tracing::warn!("could not stash GNOME defaults: {e}");
         }
-    }
-    if let Err(e) = hotkeys::register_custom_bindings() {
-        tracing::warn!("could not register hotkeys: {e}");
     }
 
     // --- D-Bus service ---

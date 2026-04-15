@@ -2,6 +2,8 @@
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 const DBUS_IFACE = `
 <node>
@@ -37,19 +39,61 @@ const DBUS_IFACE = `
 </node>
 `;
 
+// (schema-key, daemon-method, GVariant-type, args-builder)
+// args-builder receives nothing and returns the Array passed to GLib.Variant.
+const HOTKEYS = [
+    ...[1,2,3,4,5,6,7,8,9].map(n => ['snap-' + n, 'SnapFocusedToZone', '(ub)', () => [n, false]]),
+    ...[1,2,3,4,5,6,7,8,9].map(n => ['span-' + n, 'SnapFocusedToZone', '(ub)', () => [n, true]]),
+    ['activator',   'ShowActivator',      null,  () => null],
+    ['iter-prev',   'IterateFocusedZone', '(s)', () => ['prev']],
+    ['iter-next',   'IterateFocusedZone', '(s)', () => ['next']],
+    ['cycle-prev',  'CycleFocusInZone',   '(i)', () => [-1]],
+    ['cycle-next',  'CycleFocusInZone',   '(i)', () => [1]],
+    ['editor',      'ShowEditor',         null,  () => null],
+    ['pause',       'TogglePaused',       null,  () => null],
+];
+
 export default class GnomeZonesMoverExtension {
     constructor(metadata) {
         this._metadata = metadata;
         this._impl = null;
+        this._settings = null;
+        this._registered = [];
     }
 
     enable() {
         this._impl = Gio.DBusExportedObject.wrapJSObject(DBUS_IFACE, this);
         this._impl.export(Gio.DBus.session, '/org/gnome/Shell/Extensions/GnomeZonesMover');
-        log('[gnome-zones-mover] enabled');
+
+        this._settings = this.getSettings
+            ? this.getSettings()
+            : new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.gnome-zones-mover' });
+
+        for (const [key, method, sig, argsOf] of HOTKEYS) {
+            const ok = Main.wm.addKeybinding(
+                key,
+                this._settings,
+                Meta.KeyBindingFlags.NONE,
+                Shell.ActionMode.NORMAL,
+                () => this._callDaemon(method, sig, argsOf()),
+            );
+            if (ok === Meta.KeyBindingAction.NONE) {
+                log('[gnome-zones-mover] failed to grab accelerator for ' + key);
+            } else {
+                this._registered.push(key);
+            }
+        }
+
+        log('[gnome-zones-mover] enabled; registered ' + this._registered.length + ' hotkeys');
     }
 
     disable() {
+        for (const key of this._registered) {
+            Main.wm.removeKeybinding(key);
+        }
+        this._registered = [];
+        this._settings = null;
+
         if (this._impl) {
             this._impl.unexport();
             this._impl = null;
@@ -57,20 +101,40 @@ export default class GnomeZonesMoverExtension {
         log('[gnome-zones-mover] disabled');
     }
 
-    // --- D-Bus methods ---
+    _callDaemon(method, sig, args) {
+        const variant = (sig && args) ? new GLib.Variant(sig, args) : null;
+        Gio.DBus.session.call(
+            'org.gnome.Zones',
+            '/org/gnome/Zones',
+            'org.gnome.Zones',
+            method,
+            variant,
+            null,
+            Gio.DBusCallFlags.NONE,
+            -1,
+            null,
+            (conn, res) => {
+                try {
+                    conn.call_finish(res);
+                } catch (e) {
+                    logError(e, '[gnome-zones-mover] ' + method + ' failed');
+                }
+            }
+        );
+    }
+
+    // --- D-Bus methods (window mover) ---
 
     MoveResizeWindow(window_id, x, y, w, h) {
         const win = this._findWindow(window_id);
         if (!win) return false;
         try {
-            // Unmaximize first — spec §4. Otherwise move_resize_frame is ignored.
             if (win.get_maximized()) {
                 win.unmaximize(Meta.MaximizeFlags.BOTH);
             }
             if (win.is_fullscreen()) {
                 win.unmake_fullscreen();
             }
-            // `true` = user-resize, so GTK clients pick up the new size.
             win.move_resize_frame(true, x, y, w, h);
             return true;
         } catch (e) {

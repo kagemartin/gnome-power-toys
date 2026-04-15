@@ -6,20 +6,29 @@ Run on a real GNOME session. These test paths no unit test can cover.
 
 1. Install `gnome-zones-mover@power-toys`:
    ```bash
-   mkdir -p ~/.local/share/gnome-shell/extensions/
-   cp -r dist/shell-extension/gnome-zones-mover@power-toys/ \
-         ~/.local/share/gnome-shell/extensions/
+   EXT=~/.local/share/gnome-shell/extensions/gnome-zones-mover@power-toys
+   mkdir -p "$EXT"
+   cp -r dist/shell-extension/gnome-zones-mover@power-toys/. "$EXT/"
+   glib-compile-schemas "$EXT/schemas/"
    ```
    Log out and back in (X11) or press `Alt+F2` `r` `Enter` (X11 only — on Wayland you must log out).
    Then enable:
    ```bash
    gnome-extensions enable gnome-zones-mover@power-toys
    ```
+   The extension owns both the `org.gnome.Shell.Extensions.GnomeZonesMover`
+   window-mover API and every keybinding (registered via
+   `Main.wm.addKeybinding`). If the extension isn't loaded, no hotkey fires.
 
 2. Build and run the daemon:
    ```bash
    cargo run -p gnome-zones-daemon
    ```
+   On first run it stashes the stock GNOME bindings that would conflict with
+   ours (`org.gnome.mutter.keybindings.toggle-tiled-left/right` and
+   `org.gnome.shell.keybindings.open-new-window-application-1..9`) and sets
+   them to `[]` so the extension's grabs succeed. These are restorable from
+   the DB if needed.
 
 ## Tests
 

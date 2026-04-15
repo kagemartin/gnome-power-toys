@@ -1,80 +1,39 @@
 // crates/gnome-zones-daemon/src/hotkeys.rs
+//
+// Hotkeys themselves are registered by the `gnome-zones-mover` shell extension
+// via `Main.wm.addKeybinding`. This module only manages *conflict resolution*:
+// stash the stock GNOME bindings that overlap our accelerators and set them to
+// `[]`, so the extension's grabs succeed. `restore_gnome_defaults` undoes this.
 use crate::db::{settings, Database};
 use crate::error::{Error, Result};
 use std::process::Command;
 
-const KEYBIND_PREFIX: &str = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/gnome-zones";
-const MEDIA_KEYS_SCHEMA: &str = "org.gnome.settings-daemon.plugins.media-keys";
-const CUSTOM_BINDING_SCHEMA: &str = "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding";
 const MUTTER_KB_SCHEMA: &str = "org.gnome.mutter.keybindings";
+const SHELL_KB_SCHEMA: &str = "org.gnome.shell.keybindings";
 
-/// (schema-relative slug, display name, accelerator, busctl command)
-///
-/// The slugs become `/.../gnome-zones-<slug>/` object paths.
-pub fn default_bindings() -> Vec<(&'static str, &'static str, &'static str, String)> {
-    let busctl = |method: &str, args: &str| -> String {
-        format!(
-            "busctl --user call org.gnome.Zones /org/gnome/Zones org.gnome.Zones {method} {args}"
-        )
-    };
-    let mut out = Vec::new();
+/// (schema, gsettings-key, our-stash-key)
+fn conflict_entries() -> Vec<(&'static str, String, String)> {
+    let mut v = Vec::new();
+    // Super+Left / Super+Right — we use these for iter-prev/next.
+    v.push((
+        MUTTER_KB_SCHEMA,
+        "toggle-tiled-left".to_string(),
+        "gnome_default_tile_left".to_string(),
+    ));
+    v.push((
+        MUTTER_KB_SCHEMA,
+        "toggle-tiled-right".to_string(),
+        "gnome_default_tile_right".to_string(),
+    ));
+    // Super+Ctrl+1..9 — we use these for snap-1..9.
     for n in 1..=9 {
-        out.push((
-            Box::leak(format!("snap-{n}").into_boxed_str()) as &str,
-            Box::leak(format!("Snap to zone {n}").into_boxed_str()) as &str,
-            Box::leak(format!("<Super><Control>{n}").into_boxed_str()) as &str,
-            busctl("SnapFocusedToZone", &format!("ub {n} false")),
-        ));
-        out.push((
-            Box::leak(format!("span-{n}").into_boxed_str()) as &str,
-            Box::leak(format!("Span into zone {n}").into_boxed_str()) as &str,
-            Box::leak(format!("<Super><Alt>{n}").into_boxed_str()) as &str,
-            busctl("SnapFocusedToZone", &format!("ub {n} true")),
+        v.push((
+            SHELL_KB_SCHEMA,
+            format!("open-new-window-application-{n}"),
+            format!("gnome_default_open_new_window_application_{n}"),
         ));
     }
-    out.push((
-        "activator",
-        "Show zone activator",
-        "<Super>grave",
-        busctl("ShowActivator", ""),
-    ));
-    out.push((
-        "iter-prev",
-        "Iterate to previous zone",
-        "<Super>Left",
-        busctl("IterateFocusedZone", "s prev"),
-    ));
-    out.push((
-        "iter-next",
-        "Iterate to next zone",
-        "<Super>Right",
-        busctl("IterateFocusedZone", "s next"),
-    ));
-    out.push((
-        "cycle-prev",
-        "Cycle focus back in zone",
-        "<Super>Page_Up",
-        busctl("CycleFocusInZone", "i -1"),
-    ));
-    out.push((
-        "cycle-next",
-        "Cycle focus forward in zone",
-        "<Super>Page_Down",
-        busctl("CycleFocusInZone", "i 1"),
-    ));
-    out.push((
-        "editor",
-        "Open zone editor",
-        "<Super><Shift>e",
-        busctl("ShowEditor", ""),
-    )); // placeholder — Plan 2 adds ShowEditor
-    out.push((
-        "pause",
-        "Toggle pause",
-        "<Super><Shift>p",
-        busctl("TogglePaused", ""),
-    ));
-    out
+    v
 }
 
 fn run(cmd: &mut Command) -> Result<String> {
@@ -98,84 +57,28 @@ fn gsettings_set(schema: &str, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn gsettings_set_with_path(schema: &str, path: &str, key: &str, value: &str) -> Result<()> {
-    run(Command::new("gsettings")
-        .args(["set", &format!("{schema}:{path}"), key, value]))?;
-    Ok(())
-}
-
-/// Stash GNOME's default `Super+Left/Right` bindings and disable them.
-/// Idempotent — calling again is a no-op once stashed.
+/// Stash GNOME's default bindings that conflict with our accelerators and set
+/// them to `[]`. Idempotent — a previously-stashed entry is skipped.
 pub fn stash_gnome_defaults(db: &Database) -> Result<()> {
-    for (gkey, our_key) in [
-        ("toggle-tiled-left", "gnome_default_tile_left"),
-        ("toggle-tiled-right", "gnome_default_tile_right"),
-    ] {
-        if settings::get_setting(db, our_key)?.is_some() {
-            continue; // already stashed on a previous run
+    for (schema, gkey, our_key) in conflict_entries() {
+        if settings::get_setting(db, &our_key)?.is_some() {
+            continue;
         }
-        let current = gsettings_get(MUTTER_KB_SCHEMA, gkey)?;
-        settings::set_setting(db, our_key, &current)?;
-        gsettings_set(MUTTER_KB_SCHEMA, gkey, "[]")?;
+        let current = gsettings_get(schema, &gkey)?;
+        settings::set_setting(db, &our_key, &current)?;
+        gsettings_set(schema, &gkey, "[]")?;
     }
     Ok(())
 }
 
 /// Restore the stashed GNOME defaults. Called on uninstall or by the user.
+#[allow(dead_code)]
 pub fn restore_gnome_defaults(db: &Database) -> Result<()> {
-    for (gkey, our_key) in [
-        ("toggle-tiled-left", "gnome_default_tile_left"),
-        ("toggle-tiled-right", "gnome_default_tile_right"),
-    ] {
-        if let Some(stashed) = settings::get_setting(db, our_key)? {
-            gsettings_set(MUTTER_KB_SCHEMA, gkey, &stashed)?;
+    for (schema, gkey, our_key) in conflict_entries() {
+        if let Some(stashed) = settings::get_setting(db, &our_key)? {
+            gsettings_set(schema, &gkey, &stashed)?;
         }
     }
-    Ok(())
-}
-
-/// Register all of our custom keybindings via gsettings. Idempotent.
-pub fn register_custom_bindings() -> Result<()> {
-    let bindings = default_bindings();
-    let mut paths: Vec<String> = Vec::with_capacity(bindings.len());
-    for (slug, name, accel, command) in &bindings {
-        let path = format!("{KEYBIND_PREFIX}-{slug}/");
-        paths.push(path.clone());
-        gsettings_set_with_path(
-            CUSTOM_BINDING_SCHEMA,
-            &path,
-            "name",
-            &format!("'{name}'"),
-        )?;
-        gsettings_set_with_path(
-            CUSTOM_BINDING_SCHEMA,
-            &path,
-            "command",
-            &format!("'{}'", command.replace('\'', "\\'")),
-        )?;
-        gsettings_set_with_path(
-            CUSTOM_BINDING_SCHEMA,
-            &path,
-            "binding",
-            &format!("'{accel}'"),
-        )?;
-    }
-    // Register all paths in the media-keys custom-keybindings array.
-    let array_value = format!(
-        "[{}]",
-        paths
-            .iter()
-            .map(|p| format!("'{p}'"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    gsettings_set(MEDIA_KEYS_SCHEMA, "custom-keybindings", &array_value)?;
-    Ok(())
-}
-
-/// Remove our custom keybindings entirely. Called on uninstall.
-pub fn unregister_custom_bindings() -> Result<()> {
-    gsettings_set(MEDIA_KEYS_SCHEMA, "custom-keybindings", "[]")?;
     Ok(())
 }
 
@@ -184,59 +87,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_bindings_includes_nine_snap_plus_nine_span() {
-        let b = default_bindings();
-        assert_eq!(
-            b.iter()
-                .filter(|(slug, _, _, _)| slug.starts_with("snap-"))
-                .count(),
-            9
-        );
-        assert_eq!(
-            b.iter()
-                .filter(|(slug, _, _, _)| slug.starts_with("span-"))
-                .count(),
-            9
-        );
-    }
-
-    #[test]
-    fn default_bindings_has_all_navigation_entries() {
-        let b = default_bindings();
-        let slugs: Vec<&str> = b.iter().map(|(s, _, _, _)| *s).collect();
-        for expected in &[
-            "activator",
-            "iter-prev",
-            "iter-next",
-            "cycle-prev",
-            "cycle-next",
-            "editor",
-            "pause",
-        ] {
+    fn conflict_entries_covers_tiling_and_super_ctrl_n() {
+        let e = conflict_entries();
+        let keys: Vec<&str> = e.iter().map(|(_, k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"toggle-tiled-left"));
+        assert!(keys.contains(&"toggle-tiled-right"));
+        for n in 1..=9 {
+            let k = format!("open-new-window-application-{n}");
             assert!(
-                slugs.contains(expected),
-                "missing binding: {expected}"
+                keys.iter().any(|x| *x == k),
+                "missing entry: {k}"
             );
         }
     }
 
     #[test]
-    fn snap_binding_uses_super_ctrl_chord() {
-        let b = default_bindings();
-        let (_, _, accel, _) = b
-            .iter()
-            .find(|(s, _, _, _)| *s == "snap-1")
-            .unwrap();
-        assert_eq!(*accel, "<Super><Control>1");
-    }
-
-    #[test]
-    fn span_binding_uses_super_alt_chord() {
-        let b = default_bindings();
-        let (_, _, accel, _) = b
-            .iter()
-            .find(|(s, _, _, _)| *s == "span-1")
-            .unwrap();
-        assert_eq!(*accel, "<Super><Alt>1");
+    fn conflict_entries_stash_keys_are_unique() {
+        let e = conflict_entries();
+        let mut stash: Vec<&str> = e.iter().map(|(_, _, s)| s.as_str()).collect();
+        stash.sort();
+        let len = stash.len();
+        stash.dedup();
+        assert_eq!(stash.len(), len, "duplicate stash keys");
     }
 }
