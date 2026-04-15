@@ -4,6 +4,7 @@ import Gio from 'gi://Gio';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const DBUS_IFACE = `
 <node>
@@ -53,21 +54,13 @@ const HOTKEYS = [
     ['pause',       'TogglePaused',       null,  () => null],
 ];
 
-export default class GnomeZonesMoverExtension {
-    constructor(metadata) {
-        this._metadata = metadata;
-        this._impl = null;
-        this._settings = null;
-        this._registered = [];
-    }
-
+export default class GnomeZonesMoverExtension extends Extension {
     enable() {
         this._impl = Gio.DBusExportedObject.wrapJSObject(DBUS_IFACE, this);
         this._impl.export(Gio.DBus.session, '/org/gnome/Shell/Extensions/GnomeZonesMover');
 
-        this._settings = this.getSettings
-            ? this.getSettings()
-            : new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.gnome-zones-mover' });
+        this._settings = this.getSettings();
+        this._registered = [];
 
         for (const [key, method, sig, argsOf] of HOTKEYS) {
             const ok = Main.wm.addKeybinding(
