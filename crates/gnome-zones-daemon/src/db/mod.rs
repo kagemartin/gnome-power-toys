@@ -39,7 +39,7 @@ impl Database {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use tempfile::NamedTempFile;
 
