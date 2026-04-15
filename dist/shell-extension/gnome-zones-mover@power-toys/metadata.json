@@ -1,0 +1,8 @@
+{
+    "uuid": "gnome-zones-mover@power-toys",
+    "name": "gnome-zones Window Mover",
+    "description": "Mutter API bridge for gnome-zones-daemon. No UI. Not intended for standalone use.",
+    "shell-version": ["45", "46", "47"],
+    "url": "https://github.com/gnome-power-toys/gnome-zones",
+    "settings-schema": null
+}
