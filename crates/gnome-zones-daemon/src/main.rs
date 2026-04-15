@@ -1,4 +1,5 @@
 mod db;
+mod dbus;
 mod error;
 mod math;
 mod model;
