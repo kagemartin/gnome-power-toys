@@ -4,6 +4,7 @@ mod math;
 mod model;
 mod monitors;
 mod presets;
+mod snap;
 mod window;
 
 fn main() {
