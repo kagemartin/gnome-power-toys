@@ -1,4 +1,5 @@
 mod error;
+mod math;
 mod model;
 
 fn main() {
