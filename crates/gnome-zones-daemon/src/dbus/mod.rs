@@ -31,3 +31,19 @@ pub async fn run_service(
         .await?;
     Ok(ServiceHandle { connection })
 }
+
+use crate::dbus::interface::{emit_monitors_changed, ZonesInterface};
+
+impl ServiceHandle {
+    /// Emit `org.gnome.Zones.MonitorsChanged` from outside the interface.
+    /// Used by the hot-plug watcher.
+    pub async fn emit_monitors_changed(&self) -> Result<()> {
+        let iface_ref: zbus::InterfaceRef<ZonesInterface> = self
+            .connection
+            .object_server()
+            .interface("/org/gnome/Zones")
+            .await?;
+        emit_monitors_changed(iface_ref.signal_context()).await?;
+        Ok(())
+    }
+}

@@ -143,3 +143,70 @@ mod tests {
         assert_ne!(compute_monitor_key("DP-1", b"A"), compute_monitor_key("DP-1", b"B"));
     }
 }
+
+// ---- Hot-plug watcher ----
+
+use crate::db::{monitors as db_monitors, Database};
+use futures_util::StreamExt;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex};
+use zbus::{MatchRule, MessageStream, MessageType};
+
+/// Watch for monitor reconfigurations. Auto-assigns the default layout to
+/// newly-seen monitors and fires `notify_tx` on each reconcile so the D-Bus
+/// interface can emit the user-facing `MonitorsChanged` signal.
+pub async fn spawn_hotplug_watcher(
+    conn: Connection,
+    db: Arc<Mutex<Database>>,
+    monitor_svc: Arc<dyn MonitorService>,
+    notify_tx: mpsc::UnboundedSender<()>,
+) -> Result<tokio::task::JoinHandle<()>> {
+    let rule = MatchRule::builder()
+        .msg_type(MessageType::Signal)
+        .interface("org.gnome.Mutter.DisplayConfig")?
+        .member("MonitorsChanged")?
+        .build();
+
+    let dbus_proxy = zbus::fdo::DBusProxy::new(&conn).await?;
+    dbus_proxy.add_match_rule(rule).await
+        .map_err(|e| zbus::Error::FDO(Box::new(e)))?;
+
+    let mut stream = MessageStream::from(&conn);
+    let handle = tokio::spawn(async move {
+        while let Some(Ok(msg)) = stream.next().await {
+            let hdr = msg.header();
+            let Some(member) = hdr.member() else { continue };
+            if member.as_str() != "MonitorsChanged" {
+                continue;
+            }
+
+            if let Err(e) = reconcile_monitors(&db, &monitor_svc).await {
+                tracing::warn!("monitor reconcile failed: {e}");
+                continue;
+            }
+            // Best-effort — if nobody's listening, just drop the event.
+            let _ = notify_tx.send(());
+        }
+    });
+    Ok(handle)
+}
+
+async fn reconcile_monitors(
+    db: &Arc<Mutex<Database>>,
+    monitor_svc: &Arc<dyn MonitorService>,
+) -> Result<()> {
+    let monitors = monitor_svc.list_monitors().await?;
+    let db = db.lock().await;
+    let default_id: i64 = db.conn.query_row(
+        "SELECT id FROM layouts WHERE name = 'Two Columns (50/50)' AND is_preset = 1",
+        [],
+        |r| r.get(0),
+    )?;
+    for m in monitors {
+        if db_monitors::get_assigned_layout_id(&db, &m.monitor_key)?.is_none() {
+            db_monitors::assign_layout(&db, &m.monitor_key, default_id)?;
+            tracing::info!(monitor_key = %m.monitor_key, "new monitor → assigned default layout");
+        }
+    }
+    Ok(())
+}

@@ -198,3 +198,8 @@ impl ZonesInterface {
     #[zbus(signal)]
     async fn editor_requested(ctx: &SignalContext<'_>, monitor_key: String) -> zbus::Result<()>;
 }
+
+/// Public helper: emit `MonitorsChanged` from anywhere that has a `SignalContext`.
+pub async fn emit_monitors_changed(ctx: &SignalContext<'_>) -> zbus::Result<()> {
+    ZonesInterface::monitors_changed(ctx).await
+}
