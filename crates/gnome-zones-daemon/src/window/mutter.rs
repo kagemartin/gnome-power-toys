@@ -32,9 +32,11 @@ impl WindowMover for MutterMover {
         let windows = self.introspect.get_windows().await?;
         for (id, props) in windows {
             if let Some(v) = props.get("has-focus") {
-                if let Ok(b) = bool::try_from(v.try_clone()?) {
-                    if b {
-                        return Ok(id);
+                if let Some(v) = v.try_clone().ok() {
+                    if let Ok(b) = bool::try_from(v) {
+                        if b {
+                            return Ok(id);
+                        }
                     }
                 }
             }
@@ -58,7 +60,8 @@ impl WindowMover for MutterMover {
         for (id, props) in windows {
             let Some(v) = props.get("frame-rect") else { continue };
             // frame-rect is an (iiii) tuple
-            let Ok(tuple) = <(i32, i32, i32, i32)>::try_from(v.try_clone()?) else { continue };
+            let Ok(v_cloned) = v.try_clone() else { continue };
+            let Ok(tuple) = <(i32, i32, i32, i32)>::try_from(v_cloned) else { continue };
             let cx = tuple.0 + tuple.2 / 2;
             let cy = tuple.1 + tuple.3 / 2;
             if cx >= rect.x && cx < x1 && cy >= rect.y && cy < y1 {

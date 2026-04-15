@@ -8,9 +8,6 @@ pub enum Error {
     #[error("D-Bus error: {0}")]
     DBus(#[from] zbus::Error),
 
-    #[error("D-Bus zvariant error: {0}")]
-    ZVariant(#[from] zbus::zvariant::Error),
-
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
