@@ -15,4 +15,7 @@ pub trait WindowMover: Send + Sync {
     async fn move_resize(&self, window_id: u64, rect: PixelRect) -> Result<()>;
     async fn windows_in_rect(&self, rect: PixelRect) -> Result<Vec<u64>>;
     async fn activate(&self, window_id: u64) -> Result<()>;
+    /// Work area (monitor rect minus struts like the top bar or dock) for the
+    /// monitor containing the focused window.
+    async fn focused_work_area(&self) -> Result<PixelRect>;
 }

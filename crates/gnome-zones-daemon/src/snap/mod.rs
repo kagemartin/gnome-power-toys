@@ -103,10 +103,19 @@ impl SnapEngine {
 
         let gap = {
             let db = self.db.lock().await;
-            crate::db::settings::get_int(&db, "gap_px", 8)? as i32
+            crate::db::settings::get_int(&db, "gap_px", 0)? as i32
         };
+        // Project onto the work area (monitor minus panels/docks) and shift by
+        // its origin so snapping respects struts like the top bar.
+        let wa = self.mover.focused_work_area().await?;
+        let projected = math::project_rect(&union_frac, wa.w, wa.h);
         let target_px = math::deflate(
-            math::project_rect(&union_frac, monitor.width_px as i32, monitor.height_px as i32),
+            PixelRect {
+                x: wa.x + projected.x,
+                y: wa.y + projected.y,
+                w: projected.w,
+                h: projected.h,
+            },
             gap,
         );
 
@@ -159,17 +168,21 @@ impl SnapEngine {
         let monitor = self.target_monitor().await?;
         let layout = self.active_layout_for(&monitor.monitor_key).await?;
 
-        // Use union of the window's zones as the cycling rect.
+        // Use union of the window's zones as the cycling rect, projected onto
+        // the focused window's work area.
         let zones_refs: Vec<&_> = state.zones.iter()
             .filter_map(|i| layout.zone(*i))
             .collect();
         if zones_refs.is_empty() { return Ok(()); }
         let union_frac = math::bounding_rect(&zones_refs);
-        let rect_px = math::project_rect(
-            &union_frac,
-            monitor.width_px as i32,
-            monitor.height_px as i32,
-        );
+        let wa = self.mover.focused_work_area().await?;
+        let projected = math::project_rect(&union_frac, wa.w, wa.h);
+        let rect_px = PixelRect {
+            x: wa.x + projected.x,
+            y: wa.y + projected.y,
+            w: projected.w,
+            h: projected.h,
+        };
 
         let ids = self.mover.windows_in_rect(rect_px).await?;
         if ids.len() < 2 { return Ok(()); }
@@ -205,12 +218,25 @@ pub(crate) mod testutil {
         }
     }
 
-    #[derive(Default)]
     pub struct MockMover {
         pub focused: StdMutex<u64>,
         pub moves: StdMutex<Vec<(u64, PixelRect)>>,
         pub activations: StdMutex<Vec<u64>>,
         pub windows_in_rect_result: StdMutex<Vec<u64>>,
+        pub work_area: StdMutex<PixelRect>,
+    }
+
+    impl Default for MockMover {
+        fn default() -> Self {
+            Self {
+                focused: StdMutex::new(0),
+                moves: StdMutex::new(Vec::new()),
+                activations: StdMutex::new(Vec::new()),
+                windows_in_rect_result: StdMutex::new(Vec::new()),
+                // Matches the tests that assume a 1920×1080 full-monitor work area.
+                work_area: StdMutex::new(PixelRect { x: 0, y: 0, w: 1920, h: 1080 }),
+            }
+        }
     }
 
     #[async_trait]
@@ -229,6 +255,9 @@ pub(crate) mod testutil {
         async fn activate(&self, window_id: u64) -> Result<()> {
             self.activations.lock().unwrap().push(window_id);
             Ok(())
+        }
+        async fn focused_work_area(&self) -> Result<PixelRect> {
+            Ok(*self.work_area.lock().unwrap())
         }
     }
 
@@ -281,11 +310,11 @@ mod tests {
         assert_eq!(moves.len(), 1);
         let (id, rect) = moves[0];
         assert_eq!(id, 42);
-        // "Two Columns (50/50)" zone 1 on 1920×1080 with 8px gap → x=8,y=8,w≈944,h≈1064
-        assert_eq!(rect.x, 8);
-        assert_eq!(rect.y, 8);
-        assert!((rect.w - 944).abs() <= 1);
-        assert!((rect.h - 1064).abs() <= 1);
+        // "Two Columns (50/50)" zone 1 on 1920×1080 work area with 0px gap → (0, 0, 960, 1080)
+        assert_eq!(rect.x, 0);
+        assert_eq!(rect.y, 0);
+        assert!((rect.w - 960).abs() <= 1);
+        assert!((rect.h - 1080).abs() <= 1);
     }
 
     #[tokio::test]
@@ -336,7 +365,7 @@ mod tests {
         assert_eq!(moves.len(), 2);
         // Second move's rect should span both halves.
         let (_, rect) = moves[1];
-        assert!((rect.w - (1920 - 16)).abs() <= 1);  // full width minus 8px gap on each side
+        assert!((rect.w - 1920).abs() <= 1);  // full work-area width, 0 gap default
     }
 
     #[tokio::test]

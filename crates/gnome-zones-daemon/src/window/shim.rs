@@ -15,6 +15,7 @@ trait GnomeZonesMover {
     fn get_focused_window_id(&self) -> zbus::Result<u64>;
     fn list_windows_in_rect(&self, x: i32, y: i32, w: i32, h: i32) -> zbus::Result<Vec<u64>>;
     fn activate_window(&self, window_id: u64) -> zbus::Result<()>;
+    fn get_focused_window_work_area(&self) -> zbus::Result<(i32, i32, i32, i32)>;
 }
 
 pub struct ShimMover {
@@ -51,5 +52,10 @@ impl WindowMover for ShimMover {
 
     async fn activate(&self, window_id: u64) -> Result<()> {
         Ok(self.proxy.activate_window(window_id).await?)
+    }
+
+    async fn focused_work_area(&self) -> Result<PixelRect> {
+        let (x, y, w, h) = self.proxy.get_focused_window_work_area().await?;
+        Ok(PixelRect { x, y, w, h })
     }
 }

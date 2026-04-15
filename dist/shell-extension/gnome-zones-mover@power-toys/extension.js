@@ -27,6 +27,12 @@ const DBUS_IFACE = `
     <method name="ActivateWindow">
       <arg type="t" direction="in" name="window_id" />
     </method>
+    <method name="GetFocusedWindowWorkArea">
+      <arg type="i" direction="out" name="x" />
+      <arg type="i" direction="out" name="y" />
+      <arg type="i" direction="out" name="w" />
+      <arg type="i" direction="out" name="h" />
+    </method>
   </interface>
 </node>
 `;
@@ -98,6 +104,14 @@ export default class GnomeZonesMoverExtension {
         if (win) {
             win.activate(global.get_current_time());
         }
+    }
+
+    GetFocusedWindowWorkArea() {
+        const win = global.display.focus_window;
+        const monitor = win ? win.get_monitor() : global.display.get_primary_monitor();
+        const workspace = global.workspace_manager.get_active_workspace();
+        const wa = workspace.get_work_area_for_monitor(monitor);
+        return [wa.x, wa.y, wa.width, wa.height];
     }
 
     // --- helpers ---

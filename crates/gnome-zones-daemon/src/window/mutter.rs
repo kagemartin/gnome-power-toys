@@ -76,4 +76,10 @@ impl WindowMover for MutterMover {
             "activate unavailable without gnome-zones-mover shell extension".into()
         ))
     }
+
+    async fn focused_work_area(&self) -> Result<PixelRect> {
+        Err(Error::Compositor(
+            "focused_work_area unavailable without gnome-zones-mover shell extension".into()
+        ))
+    }
 }
