@@ -1,4 +1,4 @@
-use crate::model::ZoneRect;
+use crate::model::{IterateDir, ZoneRect};
 
 /// Pixel rectangle. Same layout everywhere: top-left + size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +41,34 @@ pub fn bounding_rect(zones: &[&ZoneRect]) -> ZoneRect {
         y: y0,
         w: x1 - x0,
         h: y1 - y0,
+    }
+}
+
+/// Compute the next zone index for indexed iteration.
+///
+/// `current_index` — 1-based current zone, or 0 if the window isn't snapped.
+/// `zone_count`    — total zones on the active layout (must be > 0).
+///
+/// Returns the new 1-based index. Wraps.
+pub fn iterate_index(current_index: u32, zone_count: u32, dir: IterateDir) -> u32 {
+    assert!(zone_count > 0, "iterate_index needs at least one zone");
+    match dir {
+        IterateDir::Next => {
+            // Unsnapped (0) → 1. Snapped → (current mod n) + 1.
+            if current_index == 0 {
+                1
+            } else {
+                (current_index % zone_count) + 1
+            }
+        }
+        IterateDir::Prev => {
+            // Unsnapped (0) → last. Snapped → ((c - 2 + n) mod n) + 1.
+            if current_index == 0 {
+                zone_count
+            } else {
+                ((current_index + zone_count - 2) % zone_count) + 1
+            }
+        }
     }
 }
 
@@ -97,5 +125,35 @@ mod tests {
         assert!((u.y - 0.0).abs() < 1e-9);
         assert!((u.w - 1.0).abs() < 1e-9);
         assert!((u.h - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn iterate_next_wraps() {
+        assert_eq!(iterate_index(1, 3, IterateDir::Next), 2);
+        assert_eq!(iterate_index(2, 3, IterateDir::Next), 3);
+        assert_eq!(iterate_index(3, 3, IterateDir::Next), 1);
+    }
+
+    #[test]
+    fn iterate_prev_wraps() {
+        assert_eq!(iterate_index(3, 3, IterateDir::Prev), 2);
+        assert_eq!(iterate_index(2, 3, IterateDir::Prev), 1);
+        assert_eq!(iterate_index(1, 3, IterateDir::Prev), 3);
+    }
+
+    #[test]
+    fn iterate_unsnapped_next_lands_on_1() {
+        assert_eq!(iterate_index(0, 5, IterateDir::Next), 1);
+    }
+
+    #[test]
+    fn iterate_unsnapped_prev_lands_on_last() {
+        assert_eq!(iterate_index(0, 5, IterateDir::Prev), 5);
+    }
+
+    #[test]
+    fn iterate_single_zone_is_fixpoint() {
+        assert_eq!(iterate_index(1, 1, IterateDir::Next), 1);
+        assert_eq!(iterate_index(1, 1, IterateDir::Prev), 1);
     }
 }
