@@ -1,6 +1,7 @@
 mod db;
 mod dbus;
 mod error;
+mod hotkeys;
 mod math;
 mod model;
 mod monitors;
