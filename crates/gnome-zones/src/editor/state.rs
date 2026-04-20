@@ -22,6 +22,14 @@ impl From<&Zone> for ZoneWire {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    /// Divider runs vertically (left zone sits to the left of right zone).
+    Vertical,
+    /// Divider runs horizontally (top zone sits above bottom zone).
+    Horizontal,
+}
+
 /// Editor working copy.
 #[derive(Debug, Clone)]
 pub struct EditorState {
@@ -190,6 +198,45 @@ impl EditorState {
         } else {
             self.renumber_row_major();
             self.selected = Some(self.zones[0].zone_index);
+        }
+    }
+
+    /// Append a user-drawn zone. Fractional coords; renumbers row-major.
+    pub fn add_zone(&mut self, x: f64, y: f64, w: f64, h: f64) {
+        self.zones.push(Zone { zone_index: 0, x, y, w, h });
+        self.renumber_row_major();
+    }
+
+    /// Move a shared divider between two zones by a fractional delta.
+    pub fn move_divider(&mut self, first_idx: u32, second_idx: u32, axis: Axis, delta: f64) {
+        const MIN_DIVIDER_GAP: f64 = 0.02;
+        let Some(pa) = self.zones.iter().position(|z| z.zone_index == first_idx) else { return; };
+        let Some(pb) = self.zones.iter().position(|z| z.zone_index == second_idx) else { return; };
+        if pa == pb { return; }
+
+        match axis {
+            Axis::Vertical => {
+                let a_w = self.zones[pa].w;
+                let b_x = self.zones[pb].x;
+                let b_w = self.zones[pb].w;
+                let d = delta
+                    .max(-a_w + MIN_DIVIDER_GAP)
+                    .min( b_w - MIN_DIVIDER_GAP);
+                self.zones[pa].w = a_w + d;
+                self.zones[pb].x = b_x + d;
+                self.zones[pb].w = b_w - d;
+            }
+            Axis::Horizontal => {
+                let a_h = self.zones[pa].h;
+                let b_y = self.zones[pb].y;
+                let b_h = self.zones[pb].h;
+                let d = delta
+                    .max(-a_h + MIN_DIVIDER_GAP)
+                    .min( b_h - MIN_DIVIDER_GAP);
+                self.zones[pa].h = a_h + d;
+                self.zones[pb].y = b_y + d;
+                self.zones[pb].h = b_h - d;
+            }
         }
     }
 }
@@ -384,5 +431,36 @@ mod tests {
         s.selected = None;
         s.delete_selected();
         assert_eq!(s.zones.len(), 2);
+    }
+
+    #[test]
+    fn add_zone_appends_and_renumbers() {
+        let mut s = EditorState::from_layout(&two_col_layout());
+        s.add_zone(0.1, 0.1, 0.2, 0.2);
+        assert_eq!(s.zones.len(), 3);
+        let new_zone = s.zones.iter().find(|z| (z.x - 0.1).abs() < 1e-9).unwrap();
+        assert!((new_zone.w - 0.2).abs() < 1e-9);
+        assert!(s.is_dirty());
+    }
+
+    #[test]
+    fn move_divider_vertical_between_columns() {
+        let mut s = EditorState::from_layout(&two_col_layout());
+        s.move_divider(1, 2, Axis::Vertical, -0.1);
+        let left  = s.zones.iter().find(|z| z.x == 0.0).unwrap();
+        let right = s.zones.iter().find(|z| (z.x - 0.4).abs() < 1e-9).unwrap();
+        assert!((left.w - 0.4).abs() < 1e-9);
+        assert!((right.w - 0.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn move_divider_clamps_at_edges() {
+        let mut s = EditorState::from_layout(&two_col_layout());
+        s.move_divider(1, 2, Axis::Vertical, 0.6);
+        let left  = s.zones.iter().find(|z| z.x == 0.0).unwrap();
+        let right = s.zones.iter().find(|z| z.x > 0.0).unwrap();
+        assert!(left.w > 0.0);
+        assert!(right.w > 0.0);
+        assert!((left.w + right.w - 1.0).abs() < 1e-9);
     }
 }
