@@ -201,6 +201,50 @@ impl EditorView {
     }
 
     fn build_divider_handles(self: &Rc<Self>) {
-        // Populated in Task 13 step 3
+        use gtk4::GestureDrag;
+
+        const HANDLE_THICKNESS: i32 = 6;
+        let edges = self.state.borrow().shared_edges();
+        for (first_idx, second_idx, axis) in edges {
+            let state = self.state.borrow();
+            let Some(a) = state.zones.iter().find(|z| z.zone_index == first_idx).copied() else { continue; };
+            let Some(b) = state.zones.iter().find(|z| z.zone_index == second_idx).copied() else { continue; };
+            drop(state);
+
+            let handle = GBox::new(Orientation::Vertical, 0);
+            handle.add_css_class("gnome-zones-divider");
+            let (px, py, sz_w, sz_h) = match axis {
+                crate::editor::state::Axis::Vertical => {
+                    let x = (b.x * self.monitor_w as f64) as i32 - HANDLE_THICKNESS / 2;
+                    let y = (a.y * self.monitor_h as f64) as i32;
+                    let h = (a.h * self.monitor_h as f64) as i32;
+                    (x, y, HANDLE_THICKNESS, h)
+                }
+                crate::editor::state::Axis::Horizontal => {
+                    let x = (a.x * self.monitor_w as f64) as i32;
+                    let y = (b.y * self.monitor_h as f64) as i32 - HANDLE_THICKNESS / 2;
+                    let w = (a.w * self.monitor_w as f64) as i32;
+                    (x, y, w, HANDLE_THICKNESS)
+                }
+            };
+            handle.set_size_request(sz_w, sz_h);
+            self.canvas.put(&handle, px as f64, py as f64);
+            self.zone_widgets.borrow_mut().push((0, handle.clone().upcast()));
+
+            let drag = GestureDrag::new();
+            let view = Rc::downgrade(self);
+            let axis_copy = axis;
+            drag.connect_drag_update(move |_g, dx, dy| {
+                if let Some(v) = view.upgrade() {
+                    let delta = match axis_copy {
+                        crate::editor::state::Axis::Vertical   => dx / v.monitor_w as f64,
+                        crate::editor::state::Axis::Horizontal => dy / v.monitor_h as f64,
+                    };
+                    v.state.borrow_mut().move_divider(first_idx, second_idx, axis_copy, delta);
+                    v.rerender();
+                }
+            });
+            handle.add_controller(drag);
+        }
     }
 }
