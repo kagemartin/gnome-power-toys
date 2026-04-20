@@ -207,6 +207,35 @@ impl EditorState {
         self.renumber_row_major();
     }
 
+    /// Return all divider pairs (first_idx, second_idx, axis) where the two zones share
+    /// a full edge. Used by the view to place drag handles.
+    pub fn shared_edges(&self) -> Vec<(u32, u32, Axis)> {
+        let eps = 1e-6;
+        let mut out = Vec::new();
+        for (i, a) in self.zones.iter().enumerate() {
+            for b in self.zones.iter().skip(i + 1) {
+                if (a.x + a.w - b.x).abs() < eps
+                    && (a.y - b.y).abs() < eps
+                    && (a.h - b.h).abs() < eps {
+                    out.push((a.zone_index, b.zone_index, Axis::Vertical));
+                } else if (b.x + b.w - a.x).abs() < eps
+                    && (a.y - b.y).abs() < eps
+                    && (a.h - b.h).abs() < eps {
+                    out.push((b.zone_index, a.zone_index, Axis::Vertical));
+                } else if (a.y + a.h - b.y).abs() < eps
+                    && (a.x - b.x).abs() < eps
+                    && (a.w - b.w).abs() < eps {
+                    out.push((a.zone_index, b.zone_index, Axis::Horizontal));
+                } else if (b.y + b.h - a.y).abs() < eps
+                    && (a.x - b.x).abs() < eps
+                    && (a.w - b.w).abs() < eps {
+                    out.push((b.zone_index, a.zone_index, Axis::Horizontal));
+                }
+            }
+        }
+        out
+    }
+
     /// Move a shared divider between two zones by a fractional delta.
     pub fn move_divider(&mut self, first_idx: u32, second_idx: u32, axis: Axis, delta: f64) {
         const MIN_DIVIDER_GAP: f64 = 0.02;
@@ -462,5 +491,30 @@ mod tests {
         assert!(left.w > 0.0);
         assert!(right.w > 0.0);
         assert!((left.w + right.w - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn shared_edges_for_two_columns() {
+        let s = EditorState::from_layout(&two_col_layout());
+        let edges = s.shared_edges();
+        assert_eq!(edges.len(), 1);
+        let (a, b, axis) = edges[0];
+        assert_eq!((a, b), (1, 2));
+        assert_eq!(axis, Axis::Vertical);
+    }
+
+    #[test]
+    fn shared_edges_for_2x2() {
+        let s = EditorState::from_layout(&LayoutWire {
+            id: 1, name: "t".into(), is_preset: false,
+            zones: vec![
+                zw(1, 0.0, 0.0, 0.5, 0.5),
+                zw(2, 0.5, 0.0, 0.5, 0.5),
+                zw(3, 0.0, 0.5, 0.5, 0.5),
+                zw(4, 0.5, 0.5, 0.5, 0.5),
+            ],
+        });
+        let edges = s.shared_edges();
+        assert_eq!(edges.len(), 4);
     }
 }
