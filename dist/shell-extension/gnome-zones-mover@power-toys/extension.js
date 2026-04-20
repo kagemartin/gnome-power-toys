@@ -36,6 +36,17 @@ const DBUS_IFACE = `
       <arg type="i" direction="out" name="w" />
       <arg type="i" direction="out" name="h" />
     </method>
+    <method name="GetFrameRect">
+      <arg type="t" direction="in" name="window_id" />
+      <arg type="i" direction="out" name="x" />
+      <arg type="i" direction="out" name="y" />
+      <arg type="i" direction="out" name="w" />
+      <arg type="i" direction="out" name="h" />
+    </method>
+    <method name="Unmaximize">
+      <arg type="t" direction="in" name="window_id" />
+      <arg type="b" direction="out" name="ok" />
+    </method>
   </interface>
 </node>
 `;
@@ -52,6 +63,7 @@ const HOTKEYS = [
     ['cycle-next',  'CycleFocusInZone',   '(i)', () => [1]],
     ['editor',      'ShowEditor',         null,  () => null],
     ['pause',       'TogglePaused',       null,  () => null],
+    ['restore',     'RestoreFocusedWindow', null, () => null],
 ];
 
 export default class GnomeZonesMoverExtension extends Extension {
@@ -128,6 +140,34 @@ export default class GnomeZonesMoverExtension extends Extension {
             if (win.is_fullscreen()) {
                 win.unmake_fullscreen();
             }
+
+            // Mirror Tiling Assistant's tile() sequence (see
+            //   /usr/share/gnome-shell/extensions/tiling-assistant@ubuntu.com/
+            //     src/extension/tilingWindowManager.js:123-225
+            // ) which is known to work for size-hinted apps like
+            // gnome-terminal. The critical pieces beyond a plain
+            // move_resize_frame are:
+            //
+            //  1. `override_constraints(...)` — when present on mutter
+            //     (GNOME 46+), bypass the size-hint rounding path that
+            //     drops the move component.
+            //  2. `move_to_monitor(...)` — reset mutter's monitor-relative
+            //     state so the position isn't clamped back to the window's
+            //     previous monitor.
+            //  3. `move_frame` THEN `move_resize_frame` — establish
+            //     position first, then apply combined geometry. The
+            //     intermediate positioned state survives the size
+            //     negotiation.
+            if (win.override_constraints && Meta.WindowConstraint) {
+                win.override_constraints(
+                    Meta.WindowConstraint.WINDOW,
+                    Meta.WindowConstraint.WINDOW,
+                    Meta.WindowConstraint.WINDOW,
+                    Meta.WindowConstraint.WINDOW,
+                );
+            }
+            win.move_to_monitor(win.get_monitor());
+            win.move_frame(true, x, y);
             win.move_resize_frame(true, x, y, w, h);
             return true;
         } catch (e) {
@@ -169,6 +209,27 @@ export default class GnomeZonesMoverExtension extends Extension {
         const workspace = global.workspace_manager.get_active_workspace();
         const wa = workspace.get_work_area_for_monitor(monitor);
         return [wa.x, wa.y, wa.width, wa.height];
+    }
+
+    GetFrameRect(window_id) {
+        const win = this._findWindow(window_id);
+        if (!win) return [0, 0, 0, 0];
+        const r = win.get_frame_rect();
+        return [r.x, r.y, r.width, r.height];
+    }
+
+    Unmaximize(window_id) {
+        const win = this._findWindow(window_id);
+        if (!win) return false;
+        try {
+            if (win.get_maximized()) {
+                win.unmaximize(Meta.MaximizeFlags.BOTH);
+            }
+            return true;
+        } catch (e) {
+            logError(e, '[gnome-zones-mover] Unmaximize failed');
+            return false;
+        }
     }
 
     // --- helpers ---

@@ -3,5 +3,6 @@ members = [
     "crates/gnome-clips-daemon",
     "crates/gnome-clips",
     "crates/gnome-zones-daemon",
+    "crates/gnome-zones",
 ]
 resolver = "2"
