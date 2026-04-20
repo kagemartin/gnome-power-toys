@@ -560,3 +560,34 @@ impl EditorView {
         dialog.present(Some(&self.window));
     }
 }
+
+/// Public entry point: fetch the current state for `monitor_key` and present the editor.
+pub fn show(
+    app: &gtk4::Application,
+    proxy: ZonesProxy<'static>,
+    monitor_key: String,
+) {
+    let app_weak = app.downgrade();
+    let proxy_fetch = proxy.clone();
+    let mk = monitor_key.clone();
+
+    gtk4::glib::MainContext::default().spawn_local(async move {
+        let layouts = match proxy_fetch.list_layouts().await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(error = %e, "editor: list_layouts failed");
+                return;
+            }
+        };
+        let active = match proxy_fetch.get_active_layout(&mk).await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(error = %e, "editor: get_active_layout failed");
+                return;
+            }
+        };
+        let Some(app) = app_weak.upgrade() else { return; };
+        let view = EditorView::new(&app, proxy, mk, active, layouts);
+        view.window.present();
+    });
+}
