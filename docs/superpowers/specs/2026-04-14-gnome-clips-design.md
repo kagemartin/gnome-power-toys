@@ -263,23 +263,13 @@ The daemon never logs clip content to stdout, stderr, or any log file. Only meta
 
 ## 8. Packaging
 
-### Flatpak (`org.gnome.Clips`)
+Packaging for every tool in this monorepo is covered by the authoritative spec **`docs/superpowers/specs/2026-04-20-gnome-power-toys-packaging.md`**. Short version for gnome-clips:
 
-- Sandboxed — uses `xdg-portal` for clipboard access (`org.freedesktop.portal.Clipboard`)
-- `gnome-clips-daemon` runs as a background portal consumer
-- `gnome-clips` UI runs as the foreground app
-- Auto-start via the Background portal (`org.freedesktop.portal.Background`)
-- Manifest and module definitions in `dist/flatpak/`
+- Ships as the `gnome-clips` binary package inside the `gnome-power-toys` Debian source package, with the `gnome-clips-toggle@power-toys` Shell extension delivered by the `gnome-power-toys-extensions` binary package. Users install via `apt install gnome-clips` (which pulls the extensions package as a dependency) or via the `gnome-power-toys` metapackage.
+- Inside the unified `org.gnome.PowerToys` Flatpak, the clips UI and daemon are installed to `/app/bin/gnome-clips` and `/app/libexec/gnome-clips-daemon`; the launcher appears as `org.gnome.PowerToys.Clips.desktop`; the daemon is D-Bus–activated on the `org.gnome.Clips` well-known name.
+- The Super+V hotkey is registered by the `gnome-clips-toggle@power-toys` GNOME Shell extension, not by a media-keys GSettings override.
 
-### Debian package (`.deb`)
-
-- Installs both binaries to `/usr/bin/`
-- Installs systemd user service unit to `/usr/lib/systemd/user/gnome-clips-daemon.service`
-- Registers the default keyboard shortcut via a gsettings override in `/usr/share/glib-2.0/schemas/`
-- Post-install script: `systemctl --user enable --now gnome-clips-daemon`
-- Packaging files in `dist/debian/`
-
-Both packages are built from the same Rust workspace. CI produces both artifacts on each release tag.
+The earlier text in this section (a tool-specific `org.gnome.Clips` Flatpak and a standalone `gnome-clips` `.deb` built from its own source package) is superseded and should not be implemented.
 
 ---
 
