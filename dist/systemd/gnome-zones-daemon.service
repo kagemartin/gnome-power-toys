@@ -1,0 +1,15 @@
+# dist/systemd/gnome-zones-daemon.service
+[Unit]
+Description=gnome-zones daemon — keyboard-driven window zones
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gnome-zones-daemon
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=graphical-session.target

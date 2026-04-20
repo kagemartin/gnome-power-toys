@@ -1,5 +1,6 @@
 [workspace]
 members = [
     "crates/gnome-clips-daemon",
+    "crates/gnome-zones-daemon",
 ]
 resolver = "2"
