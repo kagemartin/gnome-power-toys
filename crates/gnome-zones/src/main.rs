@@ -1,3 +1,4 @@
+mod activator;
 mod app;
 mod dbus;
 mod error;
