@@ -1,0 +1,67 @@
+Source: gnome-power-toys
+Section: utils
+Priority: optional
+Maintainer: gnome-power-toys contributors <noreply@example.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc,
+               libgtk-4-dev, libadwaita-1-dev,
+               libssl-dev, pkg-config
+Standards-Version: 4.6.0
+Homepage: https://github.com/gnome-power-toys/gnome-power-toys
+
+Package: gnome-clips
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends},
+         libgtk-4-1, libadwaita-1-0,
+         gnome-shell, systemd,
+         gnome-power-toys-extensions (>= ${source:Version})
+Description: Clipboard history manager for GNOME (gnome-power-toys)
+ gnome-clips provides a persistent clipboard history for GNOME desktop,
+ triggered by Super+V. Supports text, images, files, HTML, and Markdown.
+ Features search, pinning, tagging, and privacy controls.
+ .
+ Part of the gnome-power-toys suite. Install the gnome-power-toys
+ metapackage to get every tool at once.
+
+Package: gnome-zones
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends},
+         libgtk-4-1, libadwaita-1-0,
+         gnome-shell, systemd,
+         gnome-power-toys-extensions (>= ${source:Version})
+Description: Window-zone layout manager for GNOME (gnome-power-toys)
+ gnome-zones lets you define and snap windows to layout zones on GNOME,
+ similar to Windows PowerToys FancyZones. Uses the Mutter D-Bus API with
+ a Shell-extension shim fallback.
+ .
+ Part of the gnome-power-toys suite. Install the gnome-power-toys
+ metapackage to get every tool at once.
+
+Package: gnome-power-toys-extensions
+Architecture: all
+Depends: ${misc:Depends}, gnome-shell
+Description: GNOME Shell extensions for the gnome-power-toys suite
+ Ships the Shell extensions used by the gnome-power-toys tools:
+ .
+  * gnome-clips-toggle@power-toys - registers Super+V and toggles the
+    gnome-clips popup via D-Bus.
+  * gnome-zones-mover@power-toys - Mutter-API fallback shim for
+    gnome-zones window move-resize.
+ .
+ Installed automatically when any gnome-power-toys tool that needs it
+ is installed.
+
+Package: gnome-power-toys
+Architecture: all
+Depends: ${misc:Depends},
+         gnome-clips (>= ${source:Version}),
+         gnome-zones (>= ${source:Version})
+Description: Productivity tool suite for GNOME (metapackage)
+ A collection of PowerToys-style utilities for GNOME, built from a
+ single monorepo:
+ .
+  * gnome-clips - clipboard history manager (Super+V).
+  * gnome-zones - window-zone layout manager.
+ .
+ This metapackage depends on every component and is the easiest way to
+ install the full suite. To install a single tool, install it by name
+ instead (for example, 'apt install gnome-clips').
