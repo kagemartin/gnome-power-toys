@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use gtk4::glib;
 use gtk4::prelude::*;
-use gtk4::{ApplicationWindow, Box as GBox, Orientation, Paned, Separator};
+use gtk4::{ApplicationWindow, Box as GBox, EventControllerKey, Orientation, Paned, Separator};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
@@ -53,6 +53,54 @@ impl ClipsWindow {
         paned.set_vexpand(true);
         vbox.append(&paned);
         window.set_child(Some(&vbox));
+
+        // Keyboard shortcuts.
+        let key_controller = EventControllerKey::new();
+        {
+            let window_ref = window.clone();
+            let proxy_ref = proxy.clone();
+            let clip_list_ref = clip_list.clone();
+            key_controller.connect_key_pressed(move |_, key, _, modifier| {
+                use gtk4::gdk::{Key, ModifierType};
+                let ctrl = modifier.contains(ModifierType::CONTROL_MASK);
+                match (key, ctrl) {
+                    (Key::Escape, _) => {
+                        window_ref.set_visible(false);
+                        glib::Propagation::Stop
+                    }
+                    (Key::Delete, _) => {
+                        if let Some(id) = clip_list_ref.selected_clip_id() {
+                            let proxy = proxy_ref.clone();
+                            glib::MainContext::default().spawn_local(async move {
+                                let _ = proxy.delete_clip(id).await;
+                            });
+                        }
+                        glib::Propagation::Stop
+                    }
+                    (Key::p, true) => {
+                        if let Some(id) = clip_list_ref.selected_clip_id() {
+                            let proxy = proxy_ref.clone();
+                            glib::MainContext::default().spawn_local(async move {
+                                if let Ok(detail) = proxy.get_clip(id).await {
+                                    let _ = proxy.set_pinned(id, !detail.pinned).await;
+                                }
+                            });
+                        }
+                        glib::Propagation::Stop
+                    }
+                    (Key::i, true) => {
+                        let proxy = proxy_ref.clone();
+                        glib::MainContext::default().spawn_local(async move {
+                            let current = proxy.is_incognito().await.unwrap_or(false);
+                            let _ = proxy.set_incognito(!current).await;
+                        });
+                        glib::Propagation::Stop
+                    }
+                    _ => glib::Propagation::Proceed,
+                }
+            });
+        }
+        window.add_controller(key_controller);
 
         let refresh: Rc<RefCell<Box<dyn Fn()>>> = {
             let proxy = proxy.clone();
