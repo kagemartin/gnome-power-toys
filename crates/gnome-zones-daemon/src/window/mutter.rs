@@ -82,4 +82,23 @@ impl WindowMover for MutterMover {
             "focused_work_area unavailable without gnome-zones-mover shell extension".into()
         ))
     }
+
+    async fn frame_rect(&self, window_id: u64) -> Result<PixelRect> {
+        let windows = self.introspect.get_windows().await?;
+        let props = windows.get(&window_id)
+            .ok_or_else(|| Error::Compositor(format!("window {window_id} not found")))?;
+        let v = props.get("frame-rect")
+            .ok_or_else(|| Error::Compositor("frame-rect property missing".into()))?;
+        let v_cloned = v.try_clone()
+            .map_err(|_| Error::Compositor("failed to clone frame-rect variant".into()))?;
+        let (x, y, w, h) = <(i32, i32, i32, i32)>::try_from(v_cloned)
+            .map_err(|_| Error::Compositor("frame-rect not an (iiii) tuple".into()))?;
+        Ok(PixelRect { x, y, w, h })
+    }
+
+    async fn unmaximize(&self, _window_id: u64) -> Result<()> {
+        Err(Error::Compositor(
+            "unmaximize unavailable without gnome-zones-mover shell extension".into()
+        ))
+    }
 }

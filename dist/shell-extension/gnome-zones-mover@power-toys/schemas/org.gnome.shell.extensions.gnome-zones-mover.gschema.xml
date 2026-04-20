@@ -30,6 +30,7 @@
     <key name="cycle-next" type="as"><default><![CDATA[['<Super>Page_Down']]]></default><summary>Cycle focus forward in zone</summary><description/></key>
     <key name="editor" type="as"><default><![CDATA[['<Super><Shift>e']]]></default><summary>Open zone editor</summary><description/></key>
     <key name="pause" type="as"><default><![CDATA[['<Super><Shift>p']]]></default><summary>Toggle pause</summary><description/></key>
+    <key name="restore" type="as"><default><![CDATA[['<Super>Down']]]></default><summary>Restore focused window (unsnap to pre-snap rect, or unmaximize)</summary><description/></key>
 
   </schema>
 </schemalist>
