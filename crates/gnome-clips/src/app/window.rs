@@ -193,9 +193,8 @@ impl ClipsWindow {
                     }
                     window.set_visible(false);
                     // Ask the shell extension to re-focus the previously-
-                    // focused window and synthesize Shift+Insert so the
-                    // target app actually receives the paste.
-                    request_inject_paste().await;
+                    // focused window and synthesize the paste shortcut.
+                    request_inject_paste(&proxy).await;
                 });
             })
         };
@@ -278,7 +277,8 @@ impl ClipsWindow {
         }
         window.add_controller(key_controller);
 
-        // Live updates — ClipAdded / ClipDeleted refresh the list.
+        // Live updates — ClipAdded / ClipDeleted / ClipUpdated refresh the list.
+        // ClipUpdated fires after a paste so the MRU reordering is reflected.
         {
             let proxy_sig = proxy.clone();
             let refresh = refresh.clone();
@@ -303,6 +303,18 @@ impl ClipsWindow {
                 }
             });
         }
+        {
+            let proxy_sig = proxy.clone();
+            let refresh = refresh.clone();
+            glib::MainContext::default().spawn_local(async move {
+                use futures_util::StreamExt;
+                if let Ok(mut stream) = proxy_sig.receive_clip_updated().await {
+                    while stream.next().await.is_some() {
+                        (refresh.borrow())();
+                    }
+                }
+            });
+        }
 
         // Initial load.
         (refresh.borrow())();
@@ -319,6 +331,11 @@ impl ClipsWindow {
 
     pub fn show(&self) {
         self.window.present();
+        // Re-fetch so the MRU-on-paste reordering from the previous
+        // dismissal is reflected even if the signal raced, and focus
+        // the list so Enter pastes the top entry immediately.
+        (self.refresh.borrow())();
+        self.clip_list.focus();
     }
     pub fn hide(&self) {
         self.window.set_visible(false);
@@ -333,14 +350,16 @@ impl ClipsWindow {
 }
 
 /// Call the gnome-clips-toggle shell extension's InjectPaste method,
-/// which refocuses the pre-popup window and synthesizes Shift+Insert.
-/// If the extension isn't installed/running the call fails quietly —
-/// the user can still manually Ctrl+V what's on the clipboard.
-async fn request_inject_paste() {
-    let Ok(conn) = zbus::Connection::session().await else {
-        tracing::warn!("could not connect to session bus for InjectPaste");
-        return;
-    };
+/// which refocuses the pre-popup window and synthesizes Ctrl+V (or
+/// Ctrl+Shift+V for terminals) so the chosen clip actually lands in
+/// the target app. If the extension isn't installed/running the call
+/// fails quietly — the user can still manually Ctrl+V the clipboard.
+///
+/// Reuses the existing daemon proxy's zbus Connection so we don't
+/// spin up a second connection from inside a glib::spawn_local —
+/// constructing one there hits zbus's runtime detection and panics.
+async fn request_inject_paste(proxy: &ClipsProxy<'_>) {
+    let conn = proxy.inner().connection();
     let call = conn
         .call_method(
             Some("org.gnome.Shell"),

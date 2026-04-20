@@ -4,7 +4,7 @@ use zbus::interface;
 
 use crate::clipboard::writer::ClipboardWriter;
 use crate::db::{
-    clips::{delete_clip, get_clip, get_history, set_pinned},
+    clips::{delete_clip, get_clip, get_history, set_pinned, touch_clip},
     exclusions::{add_exclusion, remove_exclusion},
     settings::{get_all_settings, set_setting},
     tags::{add_tag, get_clip_tags, remove_tag},
@@ -122,8 +122,14 @@ impl ClipsInterface {
     }
 
     /// Reads the stored clip and writes its bytes to the system clipboard
-    /// so the next Ctrl+V in any app produces them.
-    async fn paste(&self, id: i64) -> zbus::fdo::Result<()> {
+    /// so the next Ctrl+V in any app produces them. Bumps the clip's
+    /// `created_at` so it re-sorts to the top on the next list refresh,
+    /// and emits `ClipUpdated` so subscribers see the new ordering.
+    async fn paste(
+        &self,
+        #[zbus(signal_context)] ctx: zbus::SignalContext<'_>,
+        id: i64,
+    ) -> zbus::fdo::Result<()> {
         let clip = {
             let db = self.db.lock().unwrap();
             get_clip(&db, id)
@@ -134,6 +140,26 @@ impl ClipsInterface {
             .write(&clip.content, &clip.content_type)
             .await
             .map_err(map_err)?;
+
+        // Mark this clip most-recent and publish the new state.
+        let summary = {
+            let db = self.db.lock().unwrap();
+            touch_clip(&db, id).map_err(map_err)?;
+            let row = get_clip(&db, id)
+                .map_err(map_err)?
+                .ok_or_else(|| zbus::fdo::Error::Failed(format!("clip {id} disappeared")))?;
+            let tags = get_clip_tags(&db, id).map_err(map_err)?;
+            ClipSummary {
+                id: row.id,
+                content_type: row.content_type,
+                preview: row.preview.unwrap_or_default(),
+                source_app: row.source_app.unwrap_or_default(),
+                created_at: row.created_at,
+                pinned: row.pinned,
+                tags,
+            }
+        };
+        Self::clip_updated(&ctx, summary).await.ok();
         Ok(())
     }
 

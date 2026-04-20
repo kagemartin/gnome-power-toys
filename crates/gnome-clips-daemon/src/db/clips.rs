@@ -76,6 +76,21 @@ pub fn set_pinned(db: &Database, id: i64, pinned: bool) -> Result<()> {
     Ok(())
 }
 
+/// Bump `created_at` to now so this clip sorts to the top on the next
+/// history fetch. Used after a successful paste so the chosen clip
+/// becomes the most-recent entry.
+pub fn touch_clip(db: &Database, id: i64) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    db.conn.execute(
+        "UPDATE clips SET created_at = ?1 WHERE id = ?2 AND deleted = 0",
+        params![now, id],
+    )?;
+    Ok(())
+}
+
 /// filter: "" = all, "pinned" = pinned only, any MIME type prefix = filter by type
 /// search: substring match on preview
 pub fn get_history(
@@ -185,6 +200,53 @@ mod tests {
         set_pinned(&db, id, false).unwrap();
         let clip = get_clip(&db, id).unwrap().unwrap();
         assert!(!clip.pinned);
+    }
+
+    #[test]
+    fn touch_clip_bumps_created_at() {
+        let db = db();
+        let id = insert_clip(&db, b"old", "text/plain", None, None).unwrap();
+        let before = get_clip(&db, id).unwrap().unwrap().created_at;
+        // Rewind one clip's timestamp into the past so we can observe
+        // touch moving it forward, independent of wall-clock resolution.
+        db.conn
+            .execute("UPDATE clips SET created_at = ?1 WHERE id = ?2", params![before - 500, id])
+            .unwrap();
+        touch_clip(&db, id).unwrap();
+        let after = get_clip(&db, id).unwrap().unwrap().created_at;
+        assert!(after > before - 500, "touch_clip did not bump created_at");
+    }
+
+    #[test]
+    fn touch_clip_moves_row_to_top_of_history() {
+        let db = db();
+        let old = insert_clip(&db, b"old", "text/plain", None, None).unwrap();
+        let newer = insert_clip(&db, b"newer", "text/plain", None, None).unwrap();
+        // Separate the two timestamps so ordering is unambiguous. The
+        // test can then compare "old < newer" vs "old > newer" rather
+        // than dealing with same-second ties.
+        db.conn
+            .execute("UPDATE clips SET created_at = 1000 WHERE id = ?1", params![old])
+            .unwrap();
+        db.conn
+            .execute("UPDATE clips SET created_at = 2000 WHERE id = ?1", params![newer])
+            .unwrap();
+
+        let ordered: Vec<i64> = get_history(&db, "", "", 0, 100)
+            .unwrap()
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ordered.first(), Some(&newer));
+
+        // touch_clip uses the real clock, which is definitely > 2000.
+        touch_clip(&db, old).unwrap();
+        let ordered: Vec<i64> = get_history(&db, "", "", 0, 100)
+            .unwrap()
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ordered.first(), Some(&old), "touched clip should be first");
     }
 
     #[test]

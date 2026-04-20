@@ -49,13 +49,17 @@ impl ClipList {
             self.append_clip(clip, on_delete.clone());
         }
 
-        let mut n = 0;
-        let mut c = self.list_box.first_child();
-        while let Some(ch) = c {
-            n += 1;
-            c = ch.next_sibling();
+        // Auto-select the first row so Super+V → Enter pastes the most
+        // recent clip with no extra keystrokes.
+        if let Some(first) = self.list_box.row_at_index(0) {
+            self.list_box.select_row(Some(&first));
         }
-        tracing::info!(rows = n, "clip_list populated");
+    }
+
+    /// Give the ListBox keyboard focus so arrow keys and Enter act on
+    /// the selected row without the user first tabbing to it.
+    pub fn focus(&self) {
+        self.list_box.grab_focus();
     }
 
     fn append_clip<F>(&self, clip: &ClipSummary, on_delete: F)
