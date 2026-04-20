@@ -3,7 +3,7 @@ use crate::dbus::ZonesProxy;
 use crate::overlay::{build_overlay, monitor_for_key, present_overlay, KeyMode};
 use gtk4::gdk;
 use gtk4::prelude::*;
-use gtk4::{Align, EventControllerKey, Fixed, Label};
+use gtk4::{Align, EventControllerKey, Fixed, GestureClick, Label};
 
 const ACTIVATOR_TIMEOUT_MS: u64 = 3000;
 
@@ -76,6 +76,23 @@ pub fn show(
                 num.set_hexpand(true);
                 num.set_vexpand(true);
                 rect.append(&num);
+
+                // Mouse-click snaps to this zone (spec §6).
+                let click = GestureClick::new();
+                click.set_button(1);
+                let zone_index = zone.zone_index;
+                let proxy_click = proxy.clone();
+                let window_click = window.clone();
+                click.connect_pressed(move |_g, _n, _x, _y| {
+                    let proxy = proxy_click.clone();
+                    gtk4::glib::MainContext::default().spawn_local(async move {
+                        if let Err(e) = proxy.snap_focused_to_zone(zone_index, false).await {
+                            tracing::warn!(error = %e, "activator: click snap failed");
+                        }
+                    });
+                    window_click.close();
+                });
+                rect.add_controller(click);
 
                 fixed.put(&rect, zx as f64, zy as f64);
             }

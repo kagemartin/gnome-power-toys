@@ -34,6 +34,20 @@ fn conflict_entries() -> Vec<(&'static str, String, String)> {
             format!("gnome_default_open_new_window_application_{n}"),
         ));
     }
+    // Super+Grave — GNOME binds this to `switch-group` (cycle between
+    // windows of the focused app). Our activator uses the same key; if
+    // GNOME's binding wins, the activator never fires in multi-window
+    // apps like gnome-terminal. Stash and clear.
+    v.push((
+        WM_KB_SCHEMA,
+        "switch-group".to_string(),
+        "gnome_default_switch_group".to_string(),
+    ));
+    v.push((
+        WM_KB_SCHEMA,
+        "switch-group-backward".to_string(),
+        "gnome_default_switch_group_backward".to_string(),
+    ));
     v
 }
 
@@ -149,6 +163,9 @@ mod tests {
                 "missing entry: {k}"
             );
         }
+        // Activator vs switch-group conflict
+        assert!(keys.contains(&"switch-group"));
+        assert!(keys.contains(&"switch-group-backward"));
     }
 
     #[test]

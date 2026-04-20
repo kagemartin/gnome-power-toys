@@ -34,6 +34,8 @@ pub fn build_app() -> gtk4::Application {
          .gnome-zones-zone-selected { border: 2px solid rgba(255, 160, 40, 1.0); }\n\
          .gnome-zones-zone-number { color: rgba(255, 255, 255, 0.9); \
            font-size: 96pt; font-weight: bold; }\n\
+         .gnome-zones-zone-number-corner { color: rgba(255, 255, 255, 0.6); \
+           font-size: 48pt; font-weight: bold; }\n\
          .gnome-zones-divider { background: rgba(255, 255, 255, 0.4); border-radius: 3px; }\n\
          .gnome-zones-zone-ghost { background: rgba(255, 160, 40, 0.3); \
            border: 2px dashed rgba(255, 160, 40, 0.9); border-radius: 4px; }\n",

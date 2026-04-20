@@ -133,10 +133,14 @@ impl EditorView {
             b.add_css_class("gnome-zones-zone-selected");
         }
 
+        // Zone number in top-left corner (spec §5) so it doesn't fight
+        // the center-of-zone click affordance during editing.
         let num = Label::new(Some(&zone.zone_index.to_string()));
-        num.add_css_class("gnome-zones-zone-number");
-        num.set_halign(Align::Center);
-        num.set_valign(Align::Center);
+        num.add_css_class("gnome-zones-zone-number-corner");
+        num.set_halign(Align::Start);
+        num.set_valign(Align::Start);
+        num.set_margin_start(16);
+        num.set_margin_top(8);
         num.set_hexpand(true);
         num.set_vexpand(true);
         b.append(&num);
@@ -415,31 +419,43 @@ impl EditorView {
             self.canvas.put(&handle, px as f64, py as f64);
             self.divider_widgets.borrow_mut().push(handle.clone().upcast());
 
-            // Cumulative deltas are what GTK delivers; we apply incremental.
-            let last = Rc::new(Cell::new((0.0_f64, 0.0_f64)));
+            // Track applied fractional delta so we can quantize to 5%
+            // increments when Ctrl is held, and apply the incremental
+            // difference each update (GTK delivers cumulative `dx`/`dy`).
+            let applied = Rc::new(Cell::new(0.0_f64));
 
             let drag = GestureDrag::new();
             {
-                let last = last.clone();
+                let applied = applied.clone();
                 drag.connect_drag_begin(move |_g, _sx, _sy| {
-                    last.set((0.0, 0.0));
+                    applied.set(0.0);
                 });
             }
             {
                 let view = Rc::downgrade(self);
-                let last = last.clone();
-                drag.connect_drag_update(move |_g, dx, dy| {
+                let applied = applied.clone();
+                drag.connect_drag_update(move |g, dx, dy| {
                     let Some(v) = view.upgrade() else { return; };
-                    let (last_dx, last_dy) = last.get();
-                    let incr_dx = dx - last_dx;
-                    let incr_dy = dy - last_dy;
-                    last.set((dx, dy));
-
-                    let delta = match axis {
-                        crate::editor::state::Axis::Vertical   => incr_dx / v.monitor_w as f64,
-                        crate::editor::state::Axis::Horizontal => incr_dy / v.monitor_h as f64,
+                    let raw_frac = match axis {
+                        crate::editor::state::Axis::Vertical   => dx / v.monitor_w as f64,
+                        crate::editor::state::Axis::Horizontal => dy / v.monitor_h as f64,
                     };
-                    v.state.borrow_mut().move_divider(first_idx, second_idx, axis, delta);
+                    // Ctrl → snap to 5% increments (spec §5).
+                    let target = if g
+                        .current_event_state()
+                        .contains(gdk::ModifierType::CONTROL_MASK)
+                    {
+                        (raw_frac / 0.05).round() * 0.05
+                    } else {
+                        raw_frac
+                    };
+                    let prev = applied.get();
+                    let incr = target - prev;
+                    if incr.abs() < 1e-9 {
+                        return;
+                    }
+                    applied.set(target);
+                    v.state.borrow_mut().move_divider(first_idx, second_idx, axis, incr);
                     v.refresh_divider_drag(first_idx, second_idx, axis);
                 });
             }
