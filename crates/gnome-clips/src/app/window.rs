@@ -180,11 +180,15 @@ impl ClipsWindow {
             let window = window.clone();
             let proxy = proxy.clone();
             Rc::new(move |id: i64| {
+                tracing::info!(clip_id = id, "paste invoked");
                 let window = window.clone();
                 let proxy = proxy.clone();
                 glib::MainContext::default().spawn_local(async move {
-                    if let Err(e) = proxy.paste(id).await {
-                        tracing::warn!(error = %e, clip_id = id, "daemon paste failed");
+                    match proxy.paste(id).await {
+                        Ok(()) => tracing::info!(clip_id = id, "daemon paste ok"),
+                        Err(e) => {
+                            tracing::warn!(error = %e, clip_id = id, "daemon paste failed")
+                        }
                     }
                     window.set_visible(false);
                 });
@@ -197,6 +201,7 @@ impl ClipsWindow {
             let selected_id = selected_id.clone();
             preview.paste_btn.connect_clicked(move |_| {
                 if let Some(id) = selected_id.get() {
+                    tracing::info!(clip_id = id, "paste source=button");
                     paste(id);
                 }
             });
@@ -205,7 +210,10 @@ impl ClipsWindow {
         // Double-click / Enter on a row → paste.
         {
             let paste = paste.clone();
-            clip_list.connect_row_activated(move |id| paste(id));
+            clip_list.connect_row_activated(move |id| {
+                tracing::info!(clip_id = id, "paste source=row_activated");
+                paste(id);
+            });
         }
 
         // Keyboard shortcuts. Installed AFTER `paste` is built so Enter
@@ -226,6 +234,7 @@ impl ClipsWindow {
                     }
                     (Key::Return | Key::KP_Enter, false) => {
                         if let Some(id) = clip_list_ref.selected_clip_id() {
+                            tracing::info!(clip_id = id, "paste source=enter");
                             paste(id);
                         }
                         glib::Propagation::Stop

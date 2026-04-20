@@ -46,7 +46,18 @@ export default class GnomeClipsToggleExtension extends Extension {
         // Signature: Activate(a{sv} platform-data) → nothing. The
         // `parameters` argument to DBus.call() must be a tuple Variant
         // wrapping the method's argument list.
-        const parameters = new GLib.Variant('(a{sv})', [{}]);
+        //
+        // We pass `desktop-startup-id` with a valid X-server timestamp so
+        // GTK can hand it to Mutter via _NET_STARTUP_ID. Without this,
+        // Mutter's focus-stealing-prevention denies focus to the popup
+        // intermittently (the activation is not tied to a user event and
+        // our bus call arrives on a different client connection).
+        const time = global.display.get_current_time_roundtrip();
+        const startupId = `gnome-clips-toggle_TIME${time}`;
+        const platformData = {
+            'desktop-startup-id': new GLib.Variant('s', startupId),
+        };
+        const parameters = new GLib.Variant('(a{sv})', [platformData]);
         Gio.DBus.session.call(
             UI_BUS_NAME,
             UI_OBJECT_PATH,

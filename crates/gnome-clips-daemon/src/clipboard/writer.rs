@@ -85,6 +85,9 @@ async fn write_x11(clip: &Arc<Mutex<Clipboard>>, content: &[u8], mime: &str) -> 
         }
     };
 
+    // x11_clipboard::Clipboard::store verifies ownership internally
+    // before returning Ok, and keeps its worker thread alive to serve
+    // SelectionRequests for the daemon's lifetime.
     clip_guard
         .store(atoms.clipboard, target_atom, payload)
         .map_err(|e| Error::X11(format!("{e:?}")))?;
