@@ -203,8 +203,97 @@ impl EditorView {
             });
         }
 
-        // Apply/Cancel/Reset/New/Save-as/dropdown/gap wiring is Task 15 (Group E).
-        let _ = (new_btn, saveas, reset, gap_spin, apply_btn, cancel, dropdown);
+        // Gap spinner → daemon setting
+        {
+            let proxy = self.proxy.clone();
+            gap_spin.connect_value_changed(move |sb| {
+                let value = sb.value_as_int().to_string();
+                let proxy = proxy.clone();
+                gtk4::glib::MainContext::default().spawn_local(async move {
+                    if let Err(e) = proxy.set_setting("gap_px", &value).await {
+                        tracing::warn!(error = %e, "editor: set_setting(gap_px) failed");
+                    }
+                });
+            });
+        }
+
+        // Reset
+        {
+            let view = Rc::downgrade(self);
+            reset.connect_clicked(move |_| {
+                if let Some(v) = view.upgrade() {
+                    v.state.borrow_mut().reset();
+                    v.rerender();
+                }
+            });
+        }
+
+        // + New from current — clears layout_id, renames
+        {
+            let view = Rc::downgrade(self);
+            new_btn.connect_clicked(move |_| {
+                if let Some(v) = view.upgrade() {
+                    let mut st = v.state.borrow_mut();
+                    st.layout_id = None;
+                    st.is_preset = false;
+                    st.name = format!("{} (copy)", st.name);
+                    drop(st);
+                    v.rerender();
+                }
+            });
+        }
+
+        // Save as… (prompt name, forks current zones into new layout)
+        {
+            let view = Rc::downgrade(self);
+            saveas.connect_clicked(move |_| {
+                let Some(v) = view.upgrade() else { return; };
+                v.show_save_as_dialog();
+            });
+        }
+
+        // Cancel
+        {
+            let view = Rc::downgrade(self);
+            cancel.connect_clicked(move |_| {
+                if let Some(v) = view.upgrade() { v.window.close(); }
+            });
+        }
+
+        // Apply
+        {
+            let view = Rc::downgrade(self);
+            apply_btn.connect_clicked(move |_| {
+                let Some(v) = view.upgrade() else { return; };
+                v.apply_and_close();
+            });
+        }
+
+        // Layout dropdown → switch layout (fetches via D-Bus)
+        {
+            let proxy = self.proxy.clone();
+            let view = Rc::downgrade(self);
+            let layouts = all_layouts.to_vec();
+            dropdown.connect_selected_notify(move |dd| {
+                let Some(v) = view.upgrade() else { return; };
+                let Some(id) = layouts.get(dd.selected() as usize).map(|l| l.id) else { return; };
+                let proxy = proxy.clone();
+                let view_ = Rc::downgrade(&v);
+                gtk4::glib::MainContext::default().spawn_local(async move {
+                    match proxy.get_layout(id).await {
+                        Ok(layout) => {
+                            if let Some(v) = view_.upgrade() {
+                                *v.state.borrow_mut() = EditorState::from_layout(&layout);
+                                v.rerender();
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "editor: get_layout failed on dropdown change");
+                        }
+                    }
+                });
+            });
+        }
     }
 
     fn wire_canvas_drag(self: &Rc<Self>) {
@@ -374,5 +463,100 @@ impl EditorView {
         // and moving the widget during an in-flight drag can confuse the gesture.
         // The handle renders in the right visual spot relative to the pointer;
         // on drag_end, rerender() rebuilds divider handles at canonical positions.
+    }
+
+    fn apply_and_close(self: &Rc<Self>) {
+        let state = self.state.borrow().clone();
+        let proxy = self.proxy.clone();
+        let monitor_key = self.monitor_key.clone();
+        let window = self.window.clone();
+
+        gtk4::glib::MainContext::default().spawn_local(async move {
+            let zones: Vec<_> = state.zones.iter().map(Into::into).collect();
+            let id = if let Some(id) = state.layout_id {
+                if state.is_preset {
+                    // Preset is read-only: fork it instead of updating.
+                    match proxy.create_layout(&state.name, zones).await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "apply: create failed");
+                            return;
+                        }
+                    }
+                } else {
+                    if let Err(e) = proxy.update_layout(id, &state.name, zones).await {
+                        tracing::warn!(error = %e, "apply: update failed");
+                        return;
+                    }
+                    id
+                }
+            } else {
+                match proxy.create_layout(&state.name, zones).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "apply: create failed");
+                        return;
+                    }
+                }
+            };
+            if let Err(e) = proxy.assign_layout(&monitor_key, id).await {
+                tracing::warn!(error = %e, "apply: assign failed");
+            }
+            window.close();
+        });
+    }
+
+    fn show_save_as_dialog(self: &Rc<Self>) {
+        use libadwaita::prelude::*;
+        use libadwaita::{AlertDialog, ResponseAppearance};
+
+        let dialog = AlertDialog::new(
+            Some("Save layout as"),
+            Some("Enter a name for the new layout."),
+        );
+
+        let entry = gtk4::Entry::builder()
+            .text(&format!("{} (copy)", self.state.borrow().name))
+            .activates_default(true)
+            .build();
+        dialog.set_extra_child(Some(&entry));
+
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("save", "Save");
+        dialog.set_response_appearance("save", ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("save"));
+        dialog.set_close_response("cancel");
+
+        let proxy = self.proxy.clone();
+        let view = Rc::downgrade(self);
+        let entry_clone = entry.clone();
+        dialog.connect_response(None, move |dialog, response| {
+            if response == "save" {
+                let name = entry_clone.text().to_string();
+                let Some(v) = view.upgrade() else { dialog.close(); return; };
+                let zones: Vec<_> = v.state.borrow().zones.iter().map(Into::into).collect();
+                let proxy = proxy.clone();
+                let view_ = view.clone();
+                gtk4::glib::MainContext::default().spawn_local(async move {
+                    match proxy.create_layout(&name, zones).await {
+                        Ok(id) => {
+                            if let Some(v) = view_.upgrade() {
+                                match proxy.get_layout(id).await {
+                                    Ok(layout) => {
+                                        *v.state.borrow_mut() = EditorState::from_layout(&layout);
+                                        v.rerender();
+                                    }
+                                    Err(e) => tracing::warn!(error = %e, "save_as: get_layout failed"),
+                                }
+                            }
+                        }
+                        Err(e) => tracing::warn!(error = %e, "save_as: create_layout failed"),
+                    }
+                });
+            }
+            dialog.close();
+        });
+
+        dialog.present(Some(&self.window));
     }
 }
