@@ -1,42 +1,43 @@
 //! X11 clipboard monitor using x11-clipboard crate.
-//! Polls every 500ms as Wayland monitor does.
+//! Polls every 500ms as the Wayland monitor does.
 
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+
+use tokio::sync::{mpsc, Mutex};
 use x11_clipboard::Clipboard;
 
 use super::{content_hash, ClipboardEvent, ContentHash};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-pub async fn poll_x11(tx: mpsc::Sender<ClipboardEvent>) {
-    let clipboard = match Clipboard::new() {
-        Ok(c) => c,
-        Err(_) => {
-            tracing::error!("failed to open X11 clipboard");
-            return;
-        }
-    };
-
-    let mut last_hash: Option<ContentHash> = None;
-
+pub async fn poll_x11(
+    clipboard: Arc<Mutex<Clipboard>>,
+    last_hash: Arc<Mutex<Option<ContentHash>>>,
+    tx: mpsc::Sender<ClipboardEvent>,
+) {
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
 
-        let content = clipboard.load(
-            clipboard.getter.atoms.clipboard,
-            clipboard.getter.atoms.utf8_string,
-            clipboard.getter.atoms.property,
-            Duration::from_millis(100),
-        );
+        let content = {
+            let clip = clipboard.lock().await;
+            clip.load(
+                clip.getter.atoms.clipboard,
+                clip.getter.atoms.utf8_string,
+                clip.getter.atoms.property,
+                Duration::from_millis(100),
+            )
+        };
 
         if let Ok(content) = content {
             if content.is_empty() {
                 continue;
             }
             let hash = content_hash(&content);
-            if Some(hash) != last_hash {
-                last_hash = Some(hash);
+            let mut lh = last_hash.lock().await;
+            if Some(hash) != *lh {
+                *lh = Some(hash);
+                drop(lh);
                 let _ = tx
                     .send(ClipboardEvent {
                         content,
