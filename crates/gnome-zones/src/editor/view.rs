@@ -16,7 +16,9 @@ pub(crate) struct EditorView {
     pub monitor_w: i32,
     pub monitor_h: i32,
     pub proxy: ZonesProxy<'static>,
-    pub zone_widgets: RefCell<Vec<(u32, gtk4::Widget)>>,
+    pub zone_widgets: RefCell<Vec<(u32, gtk4::Widget)>>,    // zone rectangles only
+    pub divider_widgets: RefCell<Vec<gtk4::Widget>>,
+    pub ghost_widget: RefCell<Option<gtk4::Widget>>,
 }
 
 impl EditorView {
@@ -67,6 +69,8 @@ impl EditorView {
             monitor_h,
             proxy,
             zone_widgets: RefCell::new(Vec::new()),
+            divider_widgets: RefCell::new(Vec::new()),
+            ghost_widget: RefCell::new(None),
         });
 
         view.build_toolbar(&all_layouts);
@@ -77,10 +81,17 @@ impl EditorView {
 
     /// Rebuild all zone rectangles + divider handles from scratch.
     pub fn rerender(self: &Rc<Self>) {
+        // Tear down zones
         for (_, w) in self.zone_widgets.borrow().iter() {
             self.canvas.remove(w);
         }
         self.zone_widgets.borrow_mut().clear();
+        // Tear down dividers
+        for w in self.divider_widgets.borrow().iter() {
+            self.canvas.remove(w);
+        }
+        self.divider_widgets.borrow_mut().clear();
+        // (ghost_widget is NOT touched — it survives rerender intentionally)
 
         let state = self.state.borrow();
         for zone in &state.zones {
@@ -200,12 +211,8 @@ impl EditorView {
         use gtk4::GestureDrag;
 
         let drag = GestureDrag::new();
-        let view_w = Rc::downgrade(self);
-        let ghost: Rc<RefCell<Option<gtk4::Widget>>> = Rc::new(RefCell::new(None));
-
         {
-            let ghost = ghost.clone();
-            let view_w = view_w.clone();
+            let view_w = Rc::downgrade(self);
             drag.connect_drag_begin(move |_g, start_x, start_y| {
                 let Some(view) = view_w.upgrade() else { return; };
                 let fx = start_x / view.monitor_w as f64;
@@ -221,16 +228,15 @@ impl EditorView {
                 g.add_css_class("gnome-zones-zone-ghost");
                 g.set_size_request(1, 1);
                 view.canvas.put(&g, start_x, start_y);
-                *ghost.borrow_mut() = Some(g.upcast());
+                *view.ghost_widget.borrow_mut() = Some(g.upcast());
             });
         }
 
         {
-            let ghost = ghost.clone();
-            let view_w = view_w.clone();
+            let view_w = Rc::downgrade(self);
             drag.connect_drag_update(move |g, dx, dy| {
                 let Some(view) = view_w.upgrade() else { return; };
-                let Some(w) = ghost.borrow().clone() else { return; };
+                let Some(w) = view.ghost_widget.borrow().clone() else { return; };
                 let (sx, sy) = g.start_point().unwrap_or((0.0, 0.0));
                 let x0 = sx.min(sx + dx);
                 let y0 = sy.min(sy + dy);
@@ -242,11 +248,10 @@ impl EditorView {
         }
 
         {
-            let view_w = view_w.clone();
-            let ghost = ghost.clone();
+            let view_w = Rc::downgrade(self);
             drag.connect_drag_end(move |g, dx, dy| {
                 let Some(view) = view_w.upgrade() else { return; };
-                if let Some(w) = ghost.borrow_mut().take() {
+                if let Some(w) = view.ghost_widget.borrow_mut().take() {
                     view.canvas.remove(&w);
                 }
                 let (sx, sy) = g.start_point().unwrap_or((0.0, 0.0));
@@ -266,6 +271,7 @@ impl EditorView {
 
     fn build_divider_handles(self: &Rc<Self>) {
         use gtk4::GestureDrag;
+        use std::cell::Cell;
 
         const HANDLE_THICKNESS: i32 = 6;
         let edges = self.state.borrow().shared_edges();
@@ -293,22 +299,80 @@ impl EditorView {
             };
             handle.set_size_request(sz_w, sz_h);
             self.canvas.put(&handle, px as f64, py as f64);
-            self.zone_widgets.borrow_mut().push((0, handle.clone().upcast()));
+            self.divider_widgets.borrow_mut().push(handle.clone().upcast());
+
+            // Cumulative deltas are what GTK delivers; we apply incremental.
+            let last = Rc::new(Cell::new((0.0_f64, 0.0_f64)));
 
             let drag = GestureDrag::new();
-            let view = Rc::downgrade(self);
-            let axis_copy = axis;
-            drag.connect_drag_update(move |_g, dx, dy| {
-                if let Some(v) = view.upgrade() {
-                    let delta = match axis_copy {
-                        crate::editor::state::Axis::Vertical   => dx / v.monitor_w as f64,
-                        crate::editor::state::Axis::Horizontal => dy / v.monitor_h as f64,
+            {
+                let last = last.clone();
+                drag.connect_drag_begin(move |_g, _sx, _sy| {
+                    last.set((0.0, 0.0));
+                });
+            }
+            {
+                let view = Rc::downgrade(self);
+                let last = last.clone();
+                drag.connect_drag_update(move |_g, dx, dy| {
+                    let Some(v) = view.upgrade() else { return; };
+                    let (last_dx, last_dy) = last.get();
+                    let incr_dx = dx - last_dx;
+                    let incr_dy = dy - last_dy;
+                    last.set((dx, dy));
+
+                    let delta = match axis {
+                        crate::editor::state::Axis::Vertical   => incr_dx / v.monitor_w as f64,
+                        crate::editor::state::Axis::Horizontal => incr_dy / v.monitor_h as f64,
                     };
-                    v.state.borrow_mut().move_divider(first_idx, second_idx, axis_copy, delta);
-                    v.rerender();
-                }
-            });
+                    v.state.borrow_mut().move_divider(first_idx, second_idx, axis, delta);
+                    v.refresh_divider_drag(first_idx, second_idx, axis);
+                });
+            }
+            {
+                let view = Rc::downgrade(self);
+                drag.connect_drag_end(move |_g, _dx, _dy| {
+                    if let Some(v) = view.upgrade() {
+                        // Full rebuild so divider handle list is accurate for subsequent drags
+                        v.rerender();
+                    }
+                });
+            }
             handle.add_controller(drag);
         }
+    }
+
+    /// In-place visual update for a divider drag: resize the two affected zone widgets
+    /// and move the corresponding handle. Avoids full rerender during drag (which would
+    /// destroy the gesture target).
+    fn refresh_divider_drag(self: &Rc<Self>, first_idx: u32, second_idx: u32, _axis: crate::editor::state::Axis) {
+        let state = self.state.borrow();
+        let Some(a) = state.zones.iter().find(|z| z.zone_index == first_idx).copied() else { return; };
+        let Some(b) = state.zones.iter().find(|z| z.zone_index == second_idx).copied() else { return; };
+        drop(state);
+
+        // Update zone widgets
+        for (idx, widget) in self.zone_widgets.borrow().iter() {
+            if *idx == first_idx {
+                let zw = (a.w * self.monitor_w as f64) as i32;
+                let zh = (a.h * self.monitor_h as f64) as i32;
+                widget.set_size_request(zw, zh);
+                let zx = (a.x * self.monitor_w as f64) as i32;
+                let zy = (a.y * self.monitor_h as f64) as i32;
+                self.canvas.move_(widget, zx as f64, zy as f64);
+            } else if *idx == second_idx {
+                let zw = (b.w * self.monitor_w as f64) as i32;
+                let zh = (b.h * self.monitor_h as f64) as i32;
+                widget.set_size_request(zw, zh);
+                let zx = (b.x * self.monitor_w as f64) as i32;
+                let zy = (b.y * self.monitor_h as f64) as i32;
+                self.canvas.move_(widget, zx as f64, zy as f64);
+            }
+        }
+
+        // We do NOT move the handle here — the drag gesture is attached to it
+        // and moving the widget during an in-flight drag can confuse the gesture.
+        // The handle renders in the right visual spot relative to the pointer;
+        // on drag_end, rerender() rebuilds divider handles at canonical positions.
     }
 }

@@ -1929,57 +1929,24 @@ Expected: 19 tests pass.
 
 - [ ] **Step 3: Render divider handles in the view**
 
-Add to `impl EditorView` in `view.rs`:
+Divider handles need two subtleties beyond the obvious: (a) GTK's `GestureDrag`
+delivers `dx`/`dy` as cumulative offsets from drag-begin, not incremental, so we
+must track the last-seen offset and pass the increment to `state.move_divider`;
+(b) calling `rerender()` during `drag_update` would destroy the handle widget
+the drag gesture is attached to, breaking the drag sequence after one tick.
 
-```rust
-    fn build_divider_handles(self: &Rc<Self>) {
-        use gtk4::GestureDrag;
+The implementation tracks per-drag cumulative deltas in an `Rc<Cell<(f64,f64)>>`,
+computes `incr = current - last` on each update, and does an in-place visual
+refresh of only the two affected zones via a `refresh_divider_drag` helper.
+Full `rerender()` is deferred to `drag_end` so divider handles are rebuilt at
+their new canonical positions for the next drag.
 
-        const HANDLE_THICKNESS: i32 = 6;
-        let edges = self.state.borrow().shared_edges();
-        for (first_idx, second_idx, axis) in edges {
-            let state = self.state.borrow();
-            let a = state.zones.iter().find(|z| z.zone_index == first_idx).unwrap();
-            let b = state.zones.iter().find(|z| z.zone_index == second_idx).unwrap();
+See `crates/gnome-zones/src/editor/view.rs` `build_divider_handles` and
+`refresh_divider_drag` for the concrete implementation.
 
-            let handle = GBox::new(Orientation::Vertical, 0);
-            handle.add_css_class("gnome-zones-divider");
-            let (px, py, sz_w, sz_h) = match axis {
-                crate::editor::state::Axis::Vertical => {
-                    let x = (b.x * self.monitor_w as f64) as i32 - HANDLE_THICKNESS / 2;
-                    let y = (a.y * self.monitor_h as f64) as i32;
-                    let h = (a.h * self.monitor_h as f64) as i32;
-                    (x, y, HANDLE_THICKNESS, h)
-                }
-                crate::editor::state::Axis::Horizontal => {
-                    let x = (a.x * self.monitor_w as f64) as i32;
-                    let y = (b.y * self.monitor_h as f64) as i32 - HANDLE_THICKNESS / 2;
-                    let w = (a.w * self.monitor_w as f64) as i32;
-                    (x, y, w, HANDLE_THICKNESS)
-                }
-            };
-            handle.set_size_request(sz_w, sz_h);
-            drop(state);
-            self.canvas.put(&handle, px as f64, py as f64);
-            self.zone_widgets.borrow_mut().push((0, handle.clone().upcast()));
-
-            let drag = GestureDrag::new();
-            let view = Rc::downgrade(self);
-            let axis_copy = axis;
-            drag.connect_drag_update(move |_g, dx, dy| {
-                if let Some(v) = view.upgrade() {
-                    let delta = match axis_copy {
-                        crate::editor::state::Axis::Vertical   => dx / v.monitor_w as f64,
-                        crate::editor::state::Axis::Horizontal => dy / v.monitor_h as f64,
-                    };
-                    v.state.borrow_mut().move_divider(first_idx, second_idx, axis_copy, delta);
-                    v.rerender();
-                }
-            });
-            handle.add_controller(drag);
-        }
-    }
-```
+Also split the tracking vec introduced in Task 11 into three focused fields:
+`zone_widgets` (zones only, keyed by zone_index for the refresh lookup),
+`divider_widgets` (handles only), `ghost_widget` (Task 14 drag-to-draw).
 
 - [ ] **Step 4: Add CSS for the divider handle**
 
