@@ -128,8 +128,72 @@ impl EditorView {
         b.upcast()
     }
 
-    pub(crate) fn build_toolbar(self: &Rc<Self>, _all_layouts: &[LayoutSummaryWire]) {
-        // Populated in Task 12
+    pub(crate) fn build_toolbar(self: &Rc<Self>, all_layouts: &[LayoutSummaryWire]) {
+        use gtk4::{Button, DropDown, SpinButton, StringList};
+
+        let names: Vec<&str> = all_layouts.iter().map(|l| l.name.as_str()).collect();
+        let model = StringList::new(&names);
+        let dropdown = DropDown::new(Some(model), gtk4::Expression::NONE);
+        let current_id = self.state.borrow().layout_id;
+        if let Some(id) = current_id {
+            if let Some(pos) = all_layouts.iter().position(|l| l.id == id) {
+                dropdown.set_selected(pos as u32);
+            }
+        }
+        self.toolbar_container.append(&dropdown);
+
+        let new_btn   = Button::with_label("+ New from current");
+        let saveas    = Button::with_label("Save as\u{2026}");
+        let reset     = Button::with_label("Reset");
+        let split_h   = Button::with_label("+ Split horizontal");
+        let split_v   = Button::with_label("+ Split vertical");
+        let del       = Button::with_label("Delete");
+        let gap_spin  = SpinButton::with_range(0.0, 64.0, 1.0);
+        gap_spin.set_value(8.0);
+        let apply_btn = Button::with_label("Apply");
+        apply_btn.add_css_class("suggested-action");
+        let cancel    = Button::with_label("Cancel");
+
+        self.toolbar_container.append(&new_btn);
+        self.toolbar_container.append(&saveas);
+        self.toolbar_container.append(&reset);
+        self.toolbar_container.append(&split_h);
+        self.toolbar_container.append(&split_v);
+        self.toolbar_container.append(&del);
+        self.toolbar_container.append(&gap_spin);
+        self.toolbar_container.append(&apply_btn);
+        self.toolbar_container.append(&cancel);
+
+        {
+            let view = Rc::downgrade(self);
+            split_h.connect_clicked(move |_| {
+                if let Some(v) = view.upgrade() {
+                    v.state.borrow_mut().split_horizontal();
+                    v.rerender();
+                }
+            });
+        }
+        {
+            let view = Rc::downgrade(self);
+            split_v.connect_clicked(move |_| {
+                if let Some(v) = view.upgrade() {
+                    v.state.borrow_mut().split_vertical();
+                    v.rerender();
+                }
+            });
+        }
+        {
+            let view = Rc::downgrade(self);
+            del.connect_clicked(move |_| {
+                if let Some(v) = view.upgrade() {
+                    v.state.borrow_mut().delete_selected();
+                    v.rerender();
+                }
+            });
+        }
+
+        // Apply/Cancel/Reset/New/Save-as/dropdown/gap wiring is Task 15 (Group E).
+        let _ = (new_btn, saveas, reset, gap_spin, apply_btn, cancel, dropdown);
     }
 
     fn wire_canvas_drag(self: &Rc<Self>) {
