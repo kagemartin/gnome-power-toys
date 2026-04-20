@@ -150,8 +150,12 @@ impl ZonesInterface {
         &self,
         #[zbus(signal_context)] ctx: SignalContext<'_>,
     ) -> fdo::Result<()> {
-        // UI isn't implemented yet (Plan 2). Emit the signal anyway so the
-        // wire surface is complete.
+        // Cache the pre-overlay focused window so the next
+        // `SnapFocusedToZone` call targets it instead of the overlay
+        // itself, which steals focus on X11 when presented.
+        if let Err(e) = self.snap.stash_focus_for_activator().await {
+            tracing::warn!(error = %e, "show_activator: failed to stash focused window");
+        }
         let primary_key = self
             .monitor_svc.list_monitors().await.map_err(fdo_error)?
             .into_iter()

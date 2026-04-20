@@ -12,7 +12,7 @@ geometry, tray icon lifetime, Wayland vs. X11 rendering differences.
    ```
 
 2. At least one layout assigned to the primary monitor (the 2-zone preset
-   "Two Columns" is shipped by default — verify with
+   `Duet` (50/50 split) is shipped by default — verify with
    `busctl --user call org.gnome.Zones /org/gnome/Zones org.gnome.Zones ListLayouts`).
 
 3. Build the UI:

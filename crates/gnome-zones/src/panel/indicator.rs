@@ -35,6 +35,9 @@ pub enum TrayEvent {
 struct PanelTray {
     layouts: Vec<LayoutSummaryWire>,
     paused: bool,
+    /// Name of the layout currently assigned to the primary monitor, if any.
+    /// Surfaced in the submenu label ("Layout: <name>") per spec §7.
+    current_layout: Option<String>,
     event_tx: Sender<TrayEvent>,
 }
 
@@ -60,12 +63,19 @@ impl Tray for PanelTray {
     }
 
     fn icon_name(&self) -> String {
-        "view-grid-symbolic".into()
+        // Swap to a pause-cue icon when the daemon is paused (spec §7).
+        // `view-grid-symbolic` doesn't ship a strikethrough variant, so use
+        // the stock pause glyph to signal the state change clearly.
+        if self.paused {
+            "media-playback-pause-symbolic".into()
+        } else {
+            "view-grid-symbolic".into()
+        }
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
-            icon_name: "view-grid-symbolic".into(),
+            icon_name: self.icon_name(),
             icon_pixmap: Vec::new(),
             title: "gnome-zones".into(),
             description: if self.paused {
@@ -100,9 +110,13 @@ impl Tray for PanelTray {
             })
             .collect();
 
+        let submenu_label = match &self.current_layout {
+            Some(name) => format!("Layout: {}", name),
+            None => "Layout".into(),
+        };
         let layout_submenu: MenuItem<Self> = if layout_items.is_empty() {
             SubMenu {
-                label: "Layout".into(),
+                label: submenu_label,
                 enabled: false,
                 submenu: vec![StandardItem {
                     label: "(no layouts)".into(),
@@ -115,7 +129,7 @@ impl Tray for PanelTray {
             .into()
         } else {
             SubMenu {
-                label: "Layout".into(),
+                label: submenu_label,
                 submenu: layout_items,
                 ..Default::default()
             }
@@ -184,6 +198,7 @@ impl Indicator {
         rt: RtHandle,
         layouts: Vec<LayoutSummaryWire>,
         paused: bool,
+        current_layout: Option<String>,
     ) -> Result<(Self, Receiver<TrayEvent>), ksni::Error> {
         // Unbounded channel: tray clicks are sparse and we must never block
         // the tokio worker running the menu closure.
@@ -192,6 +207,7 @@ impl Indicator {
         let tray = PanelTray {
             layouts,
             paused,
+            current_layout,
             event_tx,
         };
 
@@ -221,6 +237,19 @@ impl Indicator {
             handle
                 .update(move |tray: &mut PanelTray| {
                     tray.layouts = layouts;
+                })
+                .await;
+        });
+    }
+
+    /// Update the currently-assigned-layout name shown in the Layout submenu
+    /// label. `None` falls back to a bare "Layout" label.
+    pub fn set_current_layout(&self, current: Option<String>) {
+        let handle = self.handle.clone();
+        self.rt.spawn(async move {
+            handle
+                .update(move |tray: &mut PanelTray| {
+                    tray.current_layout = current;
                 })
                 .await;
         });

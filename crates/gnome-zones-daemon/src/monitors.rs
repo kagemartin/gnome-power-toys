@@ -198,7 +198,7 @@ async fn reconcile_monitors(
     let monitors = monitor_svc.list_monitors().await?;
     let db = db.lock().await;
     let default_id: i64 = db.conn.query_row(
-        "SELECT id FROM layouts WHERE name = 'Two Columns (50/50)' AND is_preset = 1",
+        "SELECT id FROM layouts WHERE name = 'Duet' AND is_preset = 1",
         [],
         |r| r.get(0),
     )?;

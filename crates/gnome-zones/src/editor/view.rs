@@ -19,6 +19,8 @@ pub(crate) struct EditorView {
     pub zone_widgets: RefCell<Vec<(u32, gtk4::Widget)>>,    // zone rectangles only
     pub divider_widgets: RefCell<Vec<gtk4::Widget>>,
     pub ghost_widget: RefCell<Option<gtk4::Widget>>,
+    pub zone_count_label: RefCell<Option<Label>>,
+    pub gap_value_label: RefCell<Option<Label>>,
 }
 
 impl EditorView {
@@ -69,6 +71,8 @@ impl EditorView {
             zone_widgets: RefCell::new(Vec::new()),
             divider_widgets: RefCell::new(Vec::new()),
             ghost_widget: RefCell::new(None),
+            zone_count_label: RefCell::new(None),
+            gap_value_label: RefCell::new(None),
         });
 
         view.build_toolbar(&all_layouts);
@@ -118,6 +122,9 @@ impl EditorView {
             self.canvas.put(&widget, zx as f64, zy as f64);
             self.zone_widgets.borrow_mut().push((zone.zone_index, widget));
         }
+        if let Some(lbl) = self.zone_count_label.borrow().as_ref() {
+            lbl.set_text(&format!("Zones: {}", state.zones.len()));
+        }
         drop(state);
 
         self.build_divider_handles();
@@ -161,7 +168,7 @@ impl EditorView {
     }
 
     pub(crate) fn build_toolbar(self: &Rc<Self>, all_layouts: &[LayoutSummaryWire]) {
-        use gtk4::{Button, DropDown, SpinButton, StringList};
+        use gtk4::{Button, DropDown, Scale, StringList};
 
         let names: Vec<&str> = all_layouts.iter().map(|l| l.name.as_str()).collect();
         let model = StringList::new(&names);
@@ -174,17 +181,45 @@ impl EditorView {
         }
         self.toolbar_container.append(&dropdown);
 
+        // Zones: N — live count, updated in `rerender`.
+        let zones_label = Label::new(Some(&format!(
+            "Zones: {}",
+            self.state.borrow().zones.len()
+        )));
+        zones_label.add_css_class("dim-label");
+        self.toolbar_container.append(&zones_label);
+        *self.zone_count_label.borrow_mut() = Some(zones_label);
+
         let new_btn   = Button::with_label("+ New from current");
         let saveas    = Button::with_label("Save as\u{2026}");
         let reset     = Button::with_label("Reset");
         let split_h   = Button::with_label("+ Split horizontal");
         let split_v   = Button::with_label("+ Split vertical");
         let del       = Button::with_label("Delete");
-        let gap_spin  = SpinButton::with_range(0.0, 64.0, 1.0);
-        gap_spin.set_value(8.0);
+
+        // Gap: [slider] Npx — spec §5 shows it as a slider, not a spinner.
+        let gap_group = GBox::new(Orientation::Horizontal, 6);
+        gap_group.add_css_class("linked");
+        let gap_prefix = Label::new(Some("Gap:"));
+        let gap_scale = Scale::with_range(gtk4::Orientation::Horizontal, 0.0, 64.0, 1.0);
+        gap_scale.set_value(8.0);
+        gap_scale.set_width_request(160);
+        gap_scale.set_draw_value(false);
+        let gap_value = Label::new(Some("8px"));
+        gap_value.add_css_class("dim-label");
+        gap_group.append(&gap_prefix);
+        gap_group.append(&gap_scale);
+        gap_group.append(&gap_value);
+        *self.gap_value_label.borrow_mut() = Some(gap_value.clone());
+
         let apply_btn = Button::with_label("Apply");
         apply_btn.add_css_class("suggested-action");
         let cancel    = Button::with_label("Cancel");
+
+        // ⎋ to close hint — spec §5. Right-aligned dim label.
+        let esc_hint = Label::new(Some("\u{238B} to close"));
+        esc_hint.add_css_class("dim-label");
+        esc_hint.set_margin_start(12);
 
         self.toolbar_container.append(&new_btn);
         self.toolbar_container.append(&saveas);
@@ -192,9 +227,10 @@ impl EditorView {
         self.toolbar_container.append(&split_h);
         self.toolbar_container.append(&split_v);
         self.toolbar_container.append(&del);
-        self.toolbar_container.append(&gap_spin);
+        self.toolbar_container.append(&gap_group);
         self.toolbar_container.append(&apply_btn);
         self.toolbar_container.append(&cancel);
+        self.toolbar_container.append(&esc_hint);
 
         {
             let view = Rc::downgrade(self);
@@ -224,11 +260,14 @@ impl EditorView {
             });
         }
 
-        // Gap spinner → daemon setting
+        // Gap slider → daemon setting + live numeric readout.
         {
             let proxy = self.proxy.clone();
-            gap_spin.connect_value_changed(move |sb| {
-                let value = sb.value_as_int().to_string();
+            let value_label = gap_value.clone();
+            gap_scale.connect_value_changed(move |s| {
+                let n = s.value().round() as i64;
+                value_label.set_text(&format!("{}px", n));
+                let value = n.to_string();
                 let proxy = proxy.clone();
                 gtk4::glib::MainContext::default().spawn_local(async move {
                     if let Err(e) = proxy.set_setting("gap_px", &value).await {
@@ -319,6 +358,9 @@ impl EditorView {
 
     /// Tear down and rebuild the toolbar (e.g. after Save-as adds a new layout).
     fn rebuild_toolbar(self: &Rc<Self>, all_layouts: &[LayoutSummaryWire]) {
+        // Drop references to child widgets that are about to be destroyed.
+        self.zone_count_label.borrow_mut().take();
+        self.gap_value_label.borrow_mut().take();
         while let Some(child) = self.toolbar_container.first_child() {
             self.toolbar_container.remove(&child);
         }

@@ -9,13 +9,25 @@ use crate::monitors::MonitorService;
 use crate::snap::state::WindowStateMap;
 use crate::window::WindowMover;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+
+/// After the activator overlay is shown, `SnapFocusedToZone` calls within
+/// this window target the window that was focused *before* the overlay came
+/// up. Matches the activator's auto-dismiss timeout (3 s) with a small
+/// safety margin so clicks that land close to the timeout still work.
+const ACTIVATOR_FOCUS_TTL: Duration = Duration::from_millis(3500);
 
 pub struct SnapEngine {
     pub(crate) db: Arc<Mutex<Database>>,
     pub(crate) monitor_svc: Arc<dyn MonitorService>,
     pub(crate) mover: Arc<dyn WindowMover>,
     pub(crate) states: Arc<WindowStateMap>,
+    /// Pre-overlay focused-window id captured on `ShowActivator`.
+    /// Consumed by the next `snap_focused_to_zone` call within
+    /// [`ACTIVATOR_FOCUS_TTL`] so the UI overlay (which steals focus on X11)
+    /// doesn't become the snap target.
+    activator_focus: Arc<Mutex<Option<(u64, Instant)>>>,
 }
 
 impl SnapEngine {
@@ -25,7 +37,36 @@ impl SnapEngine {
         mover: Arc<dyn WindowMover>,
         states: Arc<WindowStateMap>,
     ) -> Self {
-        Self { db, monitor_svc, mover, states }
+        Self {
+            db,
+            monitor_svc,
+            mover,
+            states,
+            activator_focus: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Capture the currently-focused window id so that the next
+    /// `snap_focused_to_zone` call (invoked from the activator overlay)
+    /// targets *that* window instead of the overlay itself.
+    pub async fn stash_focus_for_activator(&self) -> Result<()> {
+        let win_id = self.mover.focused_window_id().await?;
+        *self.activator_focus.lock().await = Some((win_id, Instant::now()));
+        Ok(())
+    }
+
+    /// Pop the cached pre-overlay focused window id if it's still fresh.
+    /// Always clears the cache on read (single-use; subsequent snaps
+    /// without a fresh `ShowActivator` fall back to the live focused id).
+    async fn take_activator_focus(&self) -> Option<u64> {
+        let mut guard = self.activator_focus.lock().await;
+        let Some((id, ts)) = *guard else { return None; };
+        *guard = None;
+        if ts.elapsed() <= ACTIVATOR_FOCUS_TTL {
+            Some(id)
+        } else {
+            None
+        }
     }
 
     /// Pick the monitor to act on. Prefers primary, falls back to the first in
@@ -38,15 +79,16 @@ impl SnapEngine {
             .ok_or_else(|| Error::Compositor("no monitors enumerated".into()))
     }
 
-    /// Fetch the layout assigned to a monitor. If none assigned, falls back to
-    /// "Two Columns (50/50)" and persists the assignment for next time.
+    /// Fetch the layout assigned to a monitor. If none assigned, falls back
+    /// to the `Duet` preset (50/50 split) and persists the assignment for
+    /// next time.
     pub(crate) async fn active_layout_for(&self, monitor_key: &str) -> Result<Layout> {
         let db = self.db.lock().await;
         let layout_id = match monitors::get_assigned_layout_id(&db, monitor_key)? {
             Some(id) => id,
             None => {
                 let fallback: i64 = db.conn.query_row(
-                    "SELECT id FROM layouts WHERE name = 'Two Columns (50/50)' AND is_preset = 1",
+                    "SELECT id FROM layouts WHERE name = 'Duet' AND is_preset = 1",
                     [],
                     |r| r.get(0),
                 )?;
@@ -72,7 +114,12 @@ impl SnapEngine {
             return Ok(());
         }
 
-        let win_id = self.mover.focused_window_id().await?;
+        // Prefer the pre-activator-overlay focused window if one was stashed
+        // by `ShowActivator` within the TTL; otherwise query live focus.
+        let win_id = match self.take_activator_focus().await {
+            Some(id) => id,
+            None => self.mover.focused_window_id().await?,
+        };
         let monitor = self.target_monitor().await?;
 
         let layout = self.active_layout_for(&monitor.monitor_key).await?;
@@ -310,7 +357,7 @@ mod tests {
         assert_eq!(moves.len(), 1);
         let (id, rect) = moves[0];
         assert_eq!(id, 42);
-        // "Two Columns (50/50)" zone 1 on 1920×1080 work area with 0px gap → (0, 0, 960, 1080)
+        // Duet (50/50) zone 1 on 1920×1080 work area with 0px gap → (0, 0, 960, 1080)
         assert_eq!(rect.x, 0);
         assert_eq!(rect.y, 0);
         assert!((rect.w - 960).abs() <= 1);
@@ -419,7 +466,7 @@ mod tests {
         );
         engine.iterate_focused_zone(crate::model::IterateDir::Prev).await.unwrap();
         let state = engine.states.get(42).await;
-        assert_eq!(state.zones, vec![2]);  // "Two Columns (50/50)" has 2 zones
+        assert_eq!(state.zones, vec![2]);  // Duet has 2 zones
     }
 
     #[tokio::test]

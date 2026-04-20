@@ -111,6 +111,17 @@ async fn is_paused(proxy: &dbus::ZonesProxy<'static>) -> bool {
     matches!(s.get("paused").map(String::as_str), Some("1") | Some("true"))
 }
 
+/// Fetch the name of the layout currently assigned to the primary monitor,
+/// for display in the tray's Layout submenu label. Returns `None` on any
+/// D-Bus error or when no monitors are resolvable.
+async fn current_layout_name(proxy: &dbus::ZonesProxy<'static>) -> Option<String> {
+    let mk = resolve_monitor_key(proxy, None).await;
+    if mk.is_empty() {
+        return None;
+    }
+    proxy.get_active_layout(&mk).await.ok().map(|l| l.name)
+}
+
 /// Panel (default) mode: spawn the tray, subscribe to daemon signals, and
 /// route tray events and signals back to the GTK main context.
 fn run_panel_mode(
@@ -136,19 +147,24 @@ fn run_panel_mode(
         // Initial state fetch
         let layouts = proxy.list_layouts().await.unwrap_or_default();
         let paused = is_paused(&proxy).await;
+        let current_layout = current_layout_name(&proxy).await;
 
         // Spawn the tray on the tokio runtime.
-        let (indicator, tray_rx) =
-            match panel::Indicator::spawn(rt_handle.clone(), layouts, paused) {
-                Ok(pair) => pair,
-                Err(e) => {
-                    tracing::error!(error = %e, "panel: failed to spawn tray — running without it");
-                    // Still keep the process alive via `hold` so signal
-                    // subscriptions below continue to work.
-                    let _hold = hold;
-                    return;
-                }
-            };
+        let (indicator, tray_rx) = match panel::Indicator::spawn(
+            rt_handle.clone(),
+            layouts,
+            paused,
+            current_layout,
+        ) {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::error!(error = %e, "panel: failed to spawn tray — running without it");
+                // Still keep the process alive via `hold` so signal
+                // subscriptions below continue to work.
+                let _hold = hold;
+                return;
+            }
+        };
         // Keep the Indicator alive via Rc; clones are captured by the tray
         // dispatcher + signal subscription futures below. The last clone in
         // this outer future ensures it outlives process startup.
@@ -346,6 +362,11 @@ fn run_panel_mode(
                                         tracing::warn!(error = %e, "failed to refresh layouts");
                                     }
                                 }
+                                // The current primary-monitor assignment may
+                                // point at a renamed or forked layout now.
+                                indicator.set_current_layout(
+                                    current_layout_name(&proxy).await,
+                                );
                             }
                             tracing::warn!(
                                 "LayoutsChanged stream terminated; will re-subscribe in 1s"
@@ -355,6 +376,39 @@ fn run_panel_mode(
                             tracing::warn!(
                                 error = %e,
                                 "failed to subscribe to LayoutsChanged; retrying in 1s"
+                            );
+                        }
+                    }
+                    gtk4::glib::timeout_future_seconds(1).await;
+                    if app_weak.upgrade().is_none() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        // --- LayoutAssigned signal → refresh submenu label ----------------
+        {
+            let proxy = proxy.clone();
+            let indicator = indicator.clone();
+            let app_weak = app_weak.clone();
+            gtk4::glib::MainContext::default().spawn_local(async move {
+                loop {
+                    match proxy.receive_layout_assigned().await {
+                        Ok(mut stream) => {
+                            while stream.next().await.is_some() {
+                                indicator.set_current_layout(
+                                    current_layout_name(&proxy).await,
+                                );
+                            }
+                            tracing::warn!(
+                                "LayoutAssigned stream terminated; will re-subscribe in 1s"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "failed to subscribe to LayoutAssigned; retrying in 1s"
                             );
                         }
                     }
