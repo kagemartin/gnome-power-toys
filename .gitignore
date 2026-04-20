@@ -28,10 +28,12 @@ target
 # Packaging outputs
 /build-dir/
 /flatpak-repo/
+/.flatpak-builder/
 /debian/.debhelper/
 /debian/cargo-home/
 /debian/files
 /debian/*.substvars
+/debian/*.debhelper*
 /debian/gnome-clips/
 /debian/gnome-zones/
 /debian/gnome-power-toys/
