@@ -1,0 +1,33 @@
+#!/usr/bin/make -f
+export DH_VERBOSE = 1
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release -p gnome-clips-daemon -p gnome-clips
+
+override_dh_auto_install:
+	# binaries
+	install -Dm755 target/release/gnome-clips-daemon \
+		debian/gnome-clips/usr/bin/gnome-clips-daemon
+	install -Dm755 target/release/gnome-clips \
+		debian/gnome-clips/usr/bin/gnome-clips
+	# systemd user unit (packaged variant with absolute path)
+	install -Dm644 dist/systemd/gnome-clips-daemon.packaged.service \
+		debian/gnome-clips/usr/lib/systemd/user/gnome-clips-daemon.service
+	# shell extension → separate binary package
+	install -d debian/gnome-clips-extension/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys
+	cp -a dist/shell-extension/gnome-clips-toggle@power-toys/extension.js \
+		dist/shell-extension/gnome-clips-toggle@power-toys/metadata.json \
+		dist/shell-extension/gnome-clips-toggle@power-toys/README.md \
+		debian/gnome-clips-extension/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys/
+	install -d debian/gnome-clips-extension/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys/schemas
+	install -Dm644 dist/shell-extension/gnome-clips-toggle@power-toys/schemas/org.gnome.shell.extensions.gnome-clips-toggle.gschema.xml \
+		debian/gnome-clips-extension/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys/schemas/
+	# compile the extension's schema in-place (extensions load their own compiled schemas)
+	glib-compile-schemas debian/gnome-clips-extension/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys/schemas/
+
+override_dh_auto_test:
+	cargo test -p gnome-clips-daemon
