@@ -2,6 +2,7 @@ mod app;
 mod dbus;
 mod error;
 mod panel;
+mod shortcut;
 
 use std::rc::Rc;
 
@@ -15,6 +16,8 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    shortcut::register_shortcut("<Super>v");
 
     let proxy = glib::MainContext::default()
         .block_on(dbus::connect())
