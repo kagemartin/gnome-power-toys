@@ -197,7 +197,71 @@ impl EditorView {
     }
 
     fn wire_canvas_drag(self: &Rc<Self>) {
-        // Populated in Task 14
+        use gtk4::GestureDrag;
+
+        let drag = GestureDrag::new();
+        let view_w = Rc::downgrade(self);
+        let ghost: Rc<RefCell<Option<gtk4::Widget>>> = Rc::new(RefCell::new(None));
+
+        {
+            let ghost = ghost.clone();
+            let view_w = view_w.clone();
+            drag.connect_drag_begin(move |_g, start_x, start_y| {
+                let Some(view) = view_w.upgrade() else { return; };
+                let fx = start_x / view.monitor_w as f64;
+                let fy = start_y / view.monitor_h as f64;
+                let state = view.state.borrow();
+                let inside_existing = state.zones.iter().any(|z|
+                    fx >= z.x && fx <= z.x + z.w && fy >= z.y && fy <= z.y + z.h
+                );
+                drop(state);
+                if inside_existing { return; }
+
+                let g = GBox::new(Orientation::Vertical, 0);
+                g.add_css_class("gnome-zones-zone-ghost");
+                g.set_size_request(1, 1);
+                view.canvas.put(&g, start_x, start_y);
+                *ghost.borrow_mut() = Some(g.upcast());
+            });
+        }
+
+        {
+            let ghost = ghost.clone();
+            let view_w = view_w.clone();
+            drag.connect_drag_update(move |g, dx, dy| {
+                let Some(view) = view_w.upgrade() else { return; };
+                let Some(w) = ghost.borrow().clone() else { return; };
+                let (sx, sy) = g.start_point().unwrap_or((0.0, 0.0));
+                let x0 = sx.min(sx + dx);
+                let y0 = sy.min(sy + dy);
+                let rw = dx.abs().max(1.0) as i32;
+                let rh = dy.abs().max(1.0) as i32;
+                w.set_size_request(rw, rh);
+                view.canvas.move_(&w, x0, y0);
+            });
+        }
+
+        {
+            let view_w = view_w.clone();
+            let ghost = ghost.clone();
+            drag.connect_drag_end(move |g, dx, dy| {
+                let Some(view) = view_w.upgrade() else { return; };
+                if let Some(w) = ghost.borrow_mut().take() {
+                    view.canvas.remove(&w);
+                }
+                let (sx, sy) = g.start_point().unwrap_or((0.0, 0.0));
+                let fx0 = sx.min(sx + dx) / view.monitor_w as f64;
+                let fy0 = sy.min(sy + dy) / view.monitor_h as f64;
+                let fw  = dx.abs() / view.monitor_w as f64;
+                let fh  = dy.abs() / view.monitor_h as f64;
+                if fw > 0.05 && fh > 0.05 {
+                    view.state.borrow_mut().add_zone(fx0, fy0, fw, fh);
+                    view.rerender();
+                }
+            });
+        }
+
+        self.canvas.add_controller(drag);
     }
 
     fn build_divider_handles(self: &Rc<Self>) {
