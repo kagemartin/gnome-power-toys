@@ -6,7 +6,7 @@
 
 **Architecture:** A GTK4 application that connects to the `gnome-clips-daemon` D-Bus service on launch. The main window is a floating popup triggered by `Super+V` or the panel icon. The window is hidden (not destroyed) on close, so re-triggering is instant. All state lives in the D-Bus service; the UI only fetches on demand.
 
-**Tech Stack:** Rust 2021, gtk4 + libadwaita (gtk4-rs crate), zbus 4 (D-Bus client), tokio 1, libayatana-appindicator3 (panel icon).
+**Tech Stack:** Rust 2021, gtk4 + libadwaita (gtk4-rs crate), zbus 4 with its default async-io runtime (GTK3's appindicator cannot be linked alongside GTK4 in one process, and zbus's tokio feature would fight the GLib main loop), `ksni` 0.2 (pure-Rust StatusNotifierItem for the panel icon — works with the AppIndicator/KStatusNotifierItem GNOME extension that the spec targets).
 
 **Spec:** `docs/superpowers/specs/2026-04-14-gnome-clips-design.md`
 
@@ -72,18 +72,22 @@ name = "gnome-clips"
 path = "src/main.rs"
 
 [dependencies]
-gtk4       = { version = "0.9", features = ["v4_12"] }
-libadwaita = { version = "0.7", features = ["v1_5"] }
-zbus       = { version = "4",   features = ["tokio"] }
-tokio      = { version = "1",   features = ["full"] }
-tracing    = "0.1"
+gtk4         = { version = "0.9", features = ["v4_12"] }
+libadwaita   = { version = "0.7", features = ["v1_5"] }
+zbus         = "4"                              # default async-io runtime (NOT tokio)
+ksni         = "0.2"                            # StatusNotifierItem panel icon
+futures-util = "0.3"                            # StreamExt for D-Bus signals
+async-channel = "2"                             # bridge ksni thread -> GLib main loop
+tracing      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-thiserror  = "1"
-
-[dependencies.libayatana-appindicator]
-version = "0.9"
-features = []
+thiserror    = "1"
 ```
+
+Required system packages (Debian/Ubuntu):
+```bash
+sudo apt install libgtk-4-dev libadwaita-1-dev
+```
+(No GTK3 / appindicator dev packages needed — `ksni` talks D-Bus directly.)
 
 - [ ] **Step 3: Create stub main.rs**
 
@@ -100,12 +104,7 @@ fn main() {
 cargo build -p gnome-clips
 ```
 
-Expected: compiles (requires `libgtk-4-dev`, `libadwaita-1-dev`, `libayatana-appindicator3-dev` on the system).
-
-Install if missing:
-```bash
-sudo apt install libgtk-4-dev libadwaita-1-dev libayatana-appindicator3-dev
-```
+Expected: compiles (requires `libgtk-4-dev`, `libadwaita-1-dev` on the system).
 
 - [ ] **Step 5: Commit**
 
@@ -230,7 +229,8 @@ pub use proxy::{ClipDetail, ClipSummary, ClipsProxy};
 
 pub async fn connect() -> Result<ClipsProxy<'static>> {
     let conn = zbus::Connection::session().await?;
-    let proxy = ClipsProxy::new(&conn).await?;
+    // into_owned() gives us a 'static-lifetime proxy we can freely clone into GLib closures.
+    let proxy = ClipsProxy::new(&conn).await?.into_owned();
     Ok(proxy)
 }
 ```
@@ -282,16 +282,18 @@ pub mod preview_pane;
 pub mod window;
 
 use gtk4::prelude::*;
-use gtk4::Application;
+use gtk4::gio::ApplicationFlags;
 use libadwaita as adw;
+use libadwaita::prelude::*;
 
-pub const APP_ID: &str = "org.gnome.Clips";
+// DISTINCT from the daemon's bus name "org.gnome.Clips" — GtkApplication owns
+// this name on the session bus, so it MUST NOT collide with the daemon.
+pub const APP_ID: &str = "org.gnome.Clips.Ui";
 
-pub fn build_app() -> Application {
-    adw::init().expect("failed to init libadwaita");
-    Application::builder()
+pub fn build_app() -> adw::Application {
+    adw::Application::builder()
         .application_id(APP_ID)
-        .flags(gtk4::gio::ApplicationFlags::HANDLES_COMMAND_LINE)
+        .flags(ApplicationFlags::HANDLES_COMMAND_LINE)
         .build()
 }
 ```
@@ -320,15 +322,16 @@ pub fn build_app() -> Application {
 ```rust
 // crates/gnome-clips/src/app/window.rs
 use gtk4::prelude::*;
-use gtk4::{ApplicationWindow, Box as GBox, Orientation};
+use gtk4::ApplicationWindow;
 use libadwaita as adw;
+use libadwaita::prelude::*;
 
 pub struct ClipsWindow {
     pub window: ApplicationWindow,
 }
 
 impl ClipsWindow {
-    pub fn new(app: &gtk4::Application) -> Self {
+    pub fn new(app: &adw::Application) -> Self {
         let window = ApplicationWindow::builder()
             .application(app)
             .title("Clipboard History")
@@ -618,9 +621,12 @@ fn friendly_age(created_at: i64) -> String {
 ```rust
 // crates/gnome-clips/src/app/clip_list.rs
 use gtk4::prelude::*;
-use gtk4::{Box as GBox, Label, ListBox, Orientation, ScrolledWindow, SelectionMode};
+use gtk4::{ListBox, ListBoxRow, ScrolledWindow, SelectionMode};
 use crate::dbus::ClipSummary;
 use crate::app::clip_row::ClipRow;
+
+// GObject data key used to attach the clip id to a ListBoxRow.
+const CLIP_ID_KEY: &str = "clip-id";
 
 pub struct ClipList {
     pub scroll: ScrolledWindow,
@@ -643,64 +649,51 @@ impl ClipList {
         Self { scroll, list_box }
     }
 
+    /// Replace all rows. Pinned clips sort first (pinned row gets the `pinned-row`
+    /// CSS class for visual distinction — no section-header rows, which break
+    /// index-based lookup).
     pub fn populate(&self, clips: &[ClipSummary], on_delete: impl Fn(i64) + Clone + 'static) {
-        // Clear existing rows
         while let Some(child) = self.list_box.first_child() {
             self.list_box.remove(&child);
         }
 
-        // Add section header for pinned items if any pinned clips exist
-        let pinned: Vec<_> = clips.iter().filter(|c| c.pinned).collect();
-        let recent: Vec<_> = clips.iter().filter(|c| !c.pinned).collect();
+        let mut sorted: Vec<&ClipSummary> = clips.iter().collect();
+        sorted.sort_by_key(|c| (!c.pinned, -c.created_at));
 
-        if !pinned.is_empty() {
-            let header = section_label("📌 PINNED");
-            self.list_box.append(&header);
-            for clip in &pinned {
-                self.append_clip(clip, on_delete.clone());
-            }
-        }
-
-        if !recent.is_empty() {
-            let header = section_label("RECENT");
-            self.list_box.append(&header);
-            for clip in &recent {
-                self.append_clip(clip, on_delete.clone());
-            }
+        for clip in sorted {
+            self.append_clip(clip, on_delete.clone());
         }
     }
 
     fn append_clip(&self, clip: &ClipSummary, on_delete: impl Fn(i64) + 'static) {
-        let row = ClipRow::new(clip);
+        let clip_row = ClipRow::new(clip);
         let id = clip.id;
-        row.delete_btn.connect_clicked(move |_| on_delete(id));
-        self.list_box.append(&row.container);
+        clip_row.delete_btn.connect_clicked(move |_| on_delete(id));
+
+        let row = ListBoxRow::new();
+        row.set_child(Some(&clip_row.container));
+        // Safety: CLIP_ID_KEY is unique and i64 is Copy — set_data is the
+        // idiomatic gtk-rs way to attach a value to a GObject.
+        unsafe { row.set_data(CLIP_ID_KEY, id); }
+        self.list_box.append(&row);
     }
 
     pub fn connect_row_selected(&self, f: impl Fn(i64) + 'static) {
         self.list_box.connect_row_selected(move |_, row| {
             if let Some(row) = row {
-                // Extract clip id from the row's first child (ClipRow stores it as data)
-                // We use the row index to map back — callers maintain the clip list
-                let idx = row.index();
-                f(idx as i64);
+                let id = unsafe { row.data::<i64>(CLIP_ID_KEY) };
+                if let Some(ptr) = id {
+                    f(*unsafe { ptr.as_ref() });
+                }
             }
         });
     }
-}
 
-fn section_label(text: &str) -> gtk4::ListBoxRow {
-    let label = Label::new(Some(text));
-    label.set_xalign(0.0);
-    label.add_css_class("caption");
-    label.add_css_class("dim-label");
-    label.set_margin_start(8);
-    label.set_margin_top(6);
-    let row = gtk4::ListBoxRow::new();
-    row.set_child(Some(&label));
-    row.set_selectable(false);
-    row.set_activatable(false);
-    row
+    pub fn selected_clip_id(&self) -> Option<i64> {
+        let row = self.list_box.selected_row()?;
+        let ptr = unsafe { row.data::<i64>(CLIP_ID_KEY)? };
+        Some(*unsafe { ptr.as_ref() })
+    }
 }
 ```
 
@@ -899,21 +892,29 @@ Wire the filter bar, clip list, and preview pane into the two-pane layout, conne
 ```rust
 // crates/gnome-clips/src/app/window.rs
 use gtk4::prelude::*;
+use gtk4::glib;
 use gtk4::{ApplicationWindow, Box as GBox, Orientation, Paned, Separator};
-use std::cell::RefCell;
+use libadwaita as adw;
+use libadwaita::prelude::*;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::app::clip_list::ClipList;
 use crate::app::filter_bar::FilterBar;
 use crate::app::preview_pane::PreviewPane;
-use crate::dbus::{ClipSummary, ClipsProxy};
+use crate::dbus::ClipsProxy;
 
 pub struct ClipsWindow {
     pub window: ApplicationWindow,
+    pub clip_list: Rc<ClipList>,
+    pub preview: Rc<PreviewPane>,
+    pub proxy: ClipsProxy<'static>,
+    pub selected_id: Rc<Cell<Option<i64>>>,
+    pub refresh: Rc<RefCell<Box<dyn Fn()>>>,
 }
 
 impl ClipsWindow {
-    pub fn new(app: &gtk4::Application, proxy: ClipsProxy<'static>) -> Self {
+    pub fn new(app: &adw::Application, proxy: ClipsProxy<'static>) -> Self {
         let window = ApplicationWindow::builder()
             .application(app)
             .title("Clipboard History")
@@ -922,61 +923,58 @@ impl ClipsWindow {
             .decorated(true)
             .build();
 
-        // Close hides, does not destroy
+        // Close hides, does not destroy — re-showing is instant.
         window.connect_close_request(|w| {
             w.set_visible(false);
             glib::Propagation::Stop
         });
 
-        let proxy = Rc::new(proxy);
-        let clips: Rc<RefCell<Vec<ClipSummary>>> = Rc::new(RefCell::new(vec![]));
-
-        // Widgets
         let filter_bar = FilterBar::new();
         let clip_list = Rc::new(ClipList::new());
-        let preview_pane = Rc::new(PreviewPane::new());
+        let preview = Rc::new(PreviewPane::new());
+        let selected_id: Rc<Cell<Option<i64>>> = Rc::new(Cell::new(None));
 
-        // Layout: vertical box — filter bar on top, paned below
         let vbox = GBox::new(Orientation::Vertical, 0);
-
         vbox.append(&filter_bar.container);
         vbox.append(&Separator::new(Orientation::Horizontal));
 
         let paned = Paned::new(Orientation::Horizontal);
         paned.set_start_child(Some(&clip_list.scroll));
-        paned.set_end_child(Some(&preview_pane.container));
+        paned.set_end_child(Some(&preview.container));
         paned.set_position(320);
         paned.set_vexpand(true);
-
         vbox.append(&paned);
         window.set_child(Some(&vbox));
 
-        // --- Connect filter/search changes to refresh ---
-        let (proxy2, clips2, clip_list2, filter_bar2) = (
-            proxy.clone(), clips.clone(), clip_list.clone(), filter_bar.clone(),
-        );
-        let refresh = move || {
-            let proxy = proxy2.clone();
-            let clips = clips2.clone();
-            let cl = clip_list2.clone();
-            let filter = filter_bar2.active_filter().to_string();
-            let search = filter_bar2.search.text().to_string();
-            glib::MainContext::default().spawn_local(async move {
-                if let Ok(result) = proxy.get_history(&filter, &search, 0, 200).await {
-                    *clips.borrow_mut() = result.clone();
-                    // on_delete callback
-                    let proxy3 = proxy.clone();
-                    cl.populate(&result, move |id| {
-                        let proxy = proxy3.clone();
-                        glib::MainContext::default().spawn_local(async move {
-                            let _ = proxy.delete_clip(id).await;
-                        });
-                    });
-                }
-            });
+        // --- refresh closure: fetch history and repopulate list ---
+        let refresh: Rc<RefCell<Box<dyn Fn()>>> = {
+            let proxy = proxy.clone();
+            let clip_list = clip_list.clone();
+            let filter_bar = filter_bar.clone();
+            Rc::new(RefCell::new(Box::new(move || {
+                let proxy_fetch = proxy.clone();
+                let proxy_del = proxy.clone();
+                let clip_list = clip_list.clone();
+                let filter = filter_bar.active_filter().to_string();
+                let search = filter_bar.search.text().to_string();
+                glib::MainContext::default().spawn_local(async move {
+                    match proxy_fetch.get_history(&filter, &search, 0, 200).await {
+                        Ok(result) => {
+                            let proxy_del = proxy_del.clone();
+                            clip_list.populate(&result, move |id| {
+                                let proxy = proxy_del.clone();
+                                glib::MainContext::default().spawn_local(async move {
+                                    let _ = proxy.delete_clip(id).await;
+                                });
+                            });
+                        }
+                        Err(e) => tracing::warn!(error = %e, "get_history failed"),
+                    }
+                });
+            }) as Box<dyn Fn()>))
         };
 
-        // Wire up filter pills — clicking one deactivates others
+        // Filter pills: one-hot, others deactivate on click.
         let pills = [
             filter_bar.filter_all.clone(),
             filter_bar.filter_text.clone(),
@@ -987,63 +985,88 @@ impl ClipsWindow {
             filter_bar.filter_pinned.clone(),
         ];
         for (i, pill) in pills.iter().enumerate() {
-            let other_pills: Vec<_> = pills.iter().enumerate()
+            let others: Vec<_> = pills.iter().enumerate()
                 .filter(|(j, _)| *j != i)
                 .map(|(_, p)| p.clone())
                 .collect();
             let refresh = refresh.clone();
             pill.connect_toggled(move |btn| {
                 if btn.is_active() {
-                    for p in &other_pills { p.set_active(false); }
-                    refresh();
+                    for p in &others { p.set_active(false); }
+                    (refresh.borrow())();
                 }
             });
         }
 
-        // Search box changes
+        // Search field changes.
         {
             let refresh = refresh.clone();
-            filter_bar.search.connect_changed(move |_| refresh());
+            filter_bar.search.connect_changed(move |_| (refresh.borrow())());
         }
 
-        // Preview on row selection
+        // Row selection → preview.
         {
             let proxy = proxy.clone();
-            let clips = clips.clone();
-            let preview = preview_pane.clone();
-            clip_list.connect_row_selected(move |idx| {
-                let clips_ref = clips.borrow();
-                // idx may include section headers; find the clip by position
-                if let Some(clip) = clips_ref.get(idx as usize) {
-                    let id = clip.id;
-                    let proxy = proxy.clone();
-                    let preview = preview.clone();
-                    glib::MainContext::default().spawn_local(async move {
-                        if let Ok(detail) = proxy.get_clip(id).await {
-                            preview.show_clip(&detail);
-                        }
-                    });
-                }
+            let preview = preview.clone();
+            let selected_id = selected_id.clone();
+            clip_list.connect_row_selected(move |id| {
+                selected_id.set(Some(id));
+                let proxy = proxy.clone();
+                let preview = preview.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    match proxy.get_clip(id).await {
+                        Ok(detail) => preview.show_clip(&detail),
+                        Err(e) => tracing::warn!(error = %e, "get_clip failed"),
+                    }
+                });
             });
         }
 
-        // Paste button
+        // Pin button in preview pane.
         {
             let proxy = proxy.clone();
-            let clips = clips.clone();
-            preview_pane.paste_btn.connect_clicked(move |_| {
-                // Paste = copy the selected clip's content back to clipboard and close
-                // For now: identify selected ID from current clips
-                let _ = proxy.clone();
-                let _ = clips.borrow();
-                // TODO in polish pass: call wl-clipboard copy with content
+            let selected_id = selected_id.clone();
+            let refresh = refresh.clone();
+            preview.pin_btn.connect_clicked(move |btn| {
+                let Some(id) = selected_id.get() else { return; };
+                // Label is "📌 Unpin" when currently pinned.
+                let currently_pinned = btn.label()
+                    .map(|l| l.as_str().contains("Unpin"))
+                    .unwrap_or(false);
+                let proxy = proxy.clone();
+                let refresh = refresh.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    let _ = proxy.set_pinned(id, !currently_pinned).await;
+                    (refresh.borrow())();
+                });
             });
         }
 
-        // Initial load
-        refresh();
+        // Delete button in preview pane.
+        {
+            let proxy = proxy.clone();
+            let selected_id = selected_id.clone();
+            preview.delete_btn.connect_clicked(move |_| {
+                let Some(id) = selected_id.get() else { return; };
+                let proxy = proxy.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    let _ = proxy.delete_clip(id).await;
+                });
+            });
+        }
 
-        Self { window }
+        // Paste button — polish-pass will wire to wl-clipboard; for now, hide window.
+        {
+            let window_paste = window.clone();
+            preview.paste_btn.connect_clicked(move |_| {
+                window_paste.set_visible(false);
+            });
+        }
+
+        // Initial load.
+        (refresh.borrow())();
+
+        Self { window, clip_list, preview, proxy, selected_id, refresh }
     }
 
     pub fn show(&self) { self.window.present(); }
@@ -1054,7 +1077,9 @@ impl ClipsWindow {
 }
 ```
 
-- [ ] **Step 2: Update main.rs to pass proxy to window**
+- [ ] **Step 2: Update main.rs to connect proxy and launch the window**
+
+No tokio runtime — zbus uses its default async-io reactor (which runs on its own thread), and GLib's `MainContext` drives all futures polled inside the UI. `glib::MainContext::default().block_on(...)` bootstraps the initial connection before the GTK loop starts.
 
 ```rust
 // crates/gnome-clips/src/main.rs
@@ -1063,46 +1088,19 @@ mod dbus;
 mod error;
 
 use gtk4::prelude::*;
+use gtk4::glib;
+use libadwaita::prelude::*;
 use app::window::ClipsWindow;
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let proxy = rt.block_on(dbus::connect()).expect("failed to connect to gnome-clips-daemon");
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
+    let proxy = glib::MainContext::default().block_on(dbus::connect())
+        .expect("failed to connect to gnome-clips-daemon — is the daemon running?");
 
     let application = app::build_app();
-    application.connect_activate(move |app| {
-        let window = ClipsWindow::new(app, proxy.clone()); // Note: requires proxy: Clone
-        window.show();
-    });
-
-    application.run();
-}
-```
-
-Note: `ClipsProxy` from zbus implements `Clone`. The `rt` must remain alive for the duration of the app — store it in a `once_cell::sync::OnceCell` or keep it in scope.
-
-Update main.rs to keep the runtime alive:
-
-```rust
-// crates/gnome-clips/src/main.rs
-mod app;
-mod dbus;
-mod error;
-
-use gtk4::prelude::*;
-use app::window::ClipsWindow;
-
-fn main() {
-    // Keep the tokio runtime alive for the duration of the app
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    let proxy = rt.block_on(dbus::connect()).expect("failed to connect to gnome-clips-daemon — is the daemon running?");
-
-    let application = app::build_app();
-    let _rt = rt; // keep alive
 
     application.connect_activate(move |app| {
         let window = ClipsWindow::new(app, proxy.clone());
@@ -1138,29 +1136,53 @@ git commit -m "feat(ui): full two-pane window wired to D-Bus daemon"
 
 Add keyboard event handling for the shortcuts defined in the spec.
 
-- [ ] **Step 1: Add key event controller in window.rs**
+- [ ] **Step 1: Add a key event controller in `ClipsWindow::new`**
 
-Add the following inside `ClipsWindow::new`, after the window is built:
+Insert after `window.set_child(Some(&vbox));` and before the `refresh` closure. The controller reads the currently selected clip id from `ClipList::selected_clip_id()` (stored on the row via `set_data`).
 
 ```rust
-// Key controller
-let key_controller = gtk4::EventControllerKey::new();
+use gtk4::EventControllerKey;
+
+let key_controller = EventControllerKey::new();
 {
     let window_ref = window.clone();
-    let clip_list_ref = clip_list.clone();
     let proxy_ref = proxy.clone();
-    let clips_ref = clips.clone();
+    let clip_list_ref = clip_list.clone();
 
-    key_controller.connect_key_pressed(move |_, key, _, _| {
-        use gtk4::gdk::Key;
-        match key {
-            Key::Escape => {
+    key_controller.connect_key_pressed(move |_, key, _, modifier| {
+        use gtk4::gdk::{Key, ModifierType};
+        let ctrl = modifier.contains(ModifierType::CONTROL_MASK);
+        match (key, ctrl) {
+            (Key::Escape, _) => {
                 window_ref.set_visible(false);
                 glib::Propagation::Stop
             }
-            Key::Delete => {
-                // Delete selected clip
-                // Get selected row index and map to clip ID
+            (Key::Delete, _) => {
+                if let Some(id) = clip_list_ref.selected_clip_id() {
+                    let proxy = proxy_ref.clone();
+                    glib::MainContext::default().spawn_local(async move {
+                        let _ = proxy.delete_clip(id).await;
+                    });
+                }
+                glib::Propagation::Stop
+            }
+            (Key::p, true) => {
+                if let Some(id) = clip_list_ref.selected_clip_id() {
+                    let proxy = proxy_ref.clone();
+                    glib::MainContext::default().spawn_local(async move {
+                        if let Ok(detail) = proxy.get_clip(id).await {
+                            let _ = proxy.set_pinned(id, !detail.pinned).await;
+                        }
+                    });
+                }
+                glib::Propagation::Stop
+            }
+            (Key::i, true) => {
+                let proxy = proxy_ref.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    let current = proxy.is_incognito().await.unwrap_or(false);
+                    let _ = proxy.set_incognito(!current).await;
+                });
                 glib::Propagation::Stop
             }
             _ => glib::Propagation::Proceed,
@@ -1168,49 +1190,6 @@ let key_controller = gtk4::EventControllerKey::new();
     });
 }
 window.add_controller(key_controller);
-```
-
-Full implementation with all shortcuts:
-
-```rust
-key_controller.connect_key_pressed(move |_, key, _, modifier| {
-    use gtk4::gdk::{Key, ModifierType};
-    let ctrl = modifier.contains(ModifierType::CONTROL_MASK);
-
-    match (key, ctrl) {
-        (Key::Escape, _) => {
-            window_ref.set_visible(false);
-            glib::Propagation::Stop
-        }
-        (Key::Delete, _) => {
-            // Delete currently selected clip
-            let clips = clips_ref.borrow();
-            if let Some(clip) = clips.first() {
-                // In a real impl, track selected_idx in state
-                let id = clip.id;
-                let proxy = proxy_ref.clone();
-                glib::MainContext::default().spawn_local(async move {
-                    let _ = proxy.delete_clip(id).await;
-                });
-            }
-            glib::Propagation::Stop
-        }
-        (Key::p, true) => {
-            // Ctrl+P: toggle pin on selected clip
-            glib::Propagation::Stop
-        }
-        (Key::i, true) => {
-            // Ctrl+I: toggle incognito
-            let proxy = proxy_ref.clone();
-            glib::MainContext::default().spawn_local(async move {
-                let current = proxy.is_incognito().await.unwrap_or(false);
-                let _ = proxy.set_incognito(!current).await;
-            });
-            glib::Propagation::Stop
-        }
-        _ => glib::Propagation::Proceed,
-    }
-});
 ```
 
 - [ ] **Step 2: Verify it compiles**
@@ -1228,11 +1207,13 @@ git commit -m "feat(ui): keyboard navigation (Escape, Delete, Ctrl+I)"
 
 ---
 
-## Task 9: Panel status icon
+## Task 9: Panel status icon (via ksni)
+
+Uses the `ksni` crate (pure-Rust StatusNotifierItem client). ksni runs its own thread; menu callbacks fire on that thread and must be shuttled back to the GLib main loop via `async-channel` before touching GTK widgets or the D-Bus proxy.
 
 **Files:**
-- Create: `crates/gnome-clips/src/panel/indicator.rs`
 - Create: `crates/gnome-clips/src/panel/mod.rs`
+- Create: `crates/gnome-clips/src/panel/indicator.rs`
 
 - [ ] **Step 1: Create panel/mod.rs**
 
@@ -1245,80 +1226,124 @@ pub mod indicator;
 
 ```rust
 // crates/gnome-clips/src/panel/indicator.rs
-use libayatana_appindicator::{AppIndicator, AppIndicatorStatus};
-use gtk4::prelude::*;
+use ksni::{menu::StandardItem, Handle, MenuItem, Tray, TrayService};
 
-pub struct PanelIndicator {
-    indicator: AppIndicator,
+pub enum PanelEvent {
+    Activate,
+    ToggleIncognito,
+    Quit,
 }
 
-impl PanelIndicator {
-    pub fn new(on_activate: impl Fn() + 'static, on_incognito: impl Fn(bool) + 'static) -> Self {
-        let mut indicator = AppIndicator::new("gnome-clips", "edit-paste-symbolic");
-        indicator.set_status(AppIndicatorStatus::Active);
-        indicator.set_title("Clipboard History");
+pub struct ClipsTray {
+    pub incognito: bool,
+    pub tx: async_channel::Sender<PanelEvent>,
+}
 
-        // Build right-click menu
-        let menu = gtk4::Menu::new();
-
-        let open_item = gtk4::MenuItem::with_label("Open Clipboard History");
-        open_item.connect_activate(move |_| on_activate());
-        menu.append(&open_item);
-
-        let incognito_item = gtk4::CheckMenuItem::with_label("Incognito Mode");
-        incognito_item.connect_toggled(move |item| on_incognito(item.is_active()));
-        menu.append(&incognito_item);
-
-        menu.append(&gtk4::SeparatorMenuItem::new());
-
-        let quit_item = gtk4::MenuItem::with_label("Quit");
-        quit_item.connect_activate(|_| std::process::exit(0));
-        menu.append(&quit_item);
-
-        menu.show_all();
-        indicator.set_menu(&mut gtk4::Menu::from(menu));
-
-        Self { indicator }
+impl Tray for ClipsTray {
+    fn id(&self) -> String { "gnome-clips".into() }
+    fn title(&self) -> String { "Clipboard History".into() }
+    fn icon_name(&self) -> String {
+        if self.incognito { "changes-prevent-symbolic".into() }
+        else { "edit-paste-symbolic".into() }
     }
-
-    pub fn set_incognito(&mut self, enabled: bool) {
-        if enabled {
-            self.indicator.set_icon_full("changes-prevent-symbolic", "incognito");
-        } else {
-            self.indicator.set_icon_full("edit-paste-symbolic", "recording");
-        }
+    fn activate(&mut self, _x: i32, _y: i32) {
+        let _ = self.tx.try_send(PanelEvent::Activate);
     }
+    fn menu(&self) -> Vec<MenuItem<Self>> {
+        vec![
+            StandardItem {
+                label: "Open Clipboard History".into(),
+                activate: Box::new(|t: &mut ClipsTray| {
+                    let _ = t.tx.try_send(PanelEvent::Activate);
+                }),
+                ..Default::default()
+            }.into(),
+            StandardItem {
+                label: if self.incognito { "Exit Incognito".into() }
+                       else { "Enter Incognito".into() },
+                activate: Box::new(|t: &mut ClipsTray| {
+                    let _ = t.tx.try_send(PanelEvent::ToggleIncognito);
+                }),
+                ..Default::default()
+            }.into(),
+            MenuItem::Separator,
+            StandardItem {
+                label: "Quit".into(),
+                activate: Box::new(|t: &mut ClipsTray| {
+                    let _ = t.tx.try_send(PanelEvent::Quit);
+                }),
+                ..Default::default()
+            }.into(),
+        ]
+    }
+}
+
+/// Returns a handle (for live incognito updates from the UI) and a receiver
+/// the caller drains from the GLib main loop.
+pub fn spawn() -> (Handle<ClipsTray>, async_channel::Receiver<PanelEvent>) {
+    let (tx, rx) = async_channel::unbounded();
+    let tray = ClipsTray { incognito: false, tx };
+    let service = TrayService::new(tray);
+    let handle = service.handle();
+    service.spawn();
+    (handle, rx)
 }
 ```
 
-- [ ] **Step 3: Declare panel module in main.rs and wire up**
+- [ ] **Step 3: Declare panel module and wire up in main.rs**
 
-```rust
-// crates/gnome-clips/src/main.rs — add after existing mods:
-mod panel;
-```
-
-In `application.connect_activate`, create the indicator alongside the window:
+Add `mod panel;` to main.rs. Inside `connect_activate`, spawn the tray and pump its events on the GLib main loop:
 
 ```rust
 application.connect_activate(move |app| {
-    let window = Rc::new(ClipsWindow::new(app, proxy.clone()));
-    let window_ref = window.clone();
-    let proxy_ind = proxy.clone();
+    use std::rc::Rc;
+    use futures_util::StreamExt;
 
-    let _indicator = panel::indicator::PanelIndicator::new(
-        move || window_ref.toggle(),
-        move |enabled| {
-            let proxy = proxy_ind.clone();
-            glib::MainContext::default().spawn_local(async move {
-                let _ = proxy.set_incognito(enabled).await;
-            });
-        },
-    );
+    let window = Rc::new(ClipsWindow::new(app, proxy.clone()));
+
+    let (tray_handle, panel_rx) = panel::indicator::spawn();
+
+    // Reflect incognito state from daemon onto tray icon.
+    {
+        let proxy = proxy.clone();
+        let handle = tray_handle.clone();
+        glib::MainContext::default().spawn_local(async move {
+            if let Ok(cur) = proxy.is_incognito().await {
+                handle.update(|t| t.incognito = cur);
+            }
+            if let Ok(mut stream) = proxy.receive_incognito_changed().await {
+                while let Some(sig) = stream.next().await {
+                    if let Ok(enabled) = sig.args() {
+                        handle.update(|t| t.incognito = *enabled);
+                    }
+                }
+            }
+        });
+    }
+
+    // Pump tray events into GTK.
+    {
+        let window = window.clone();
+        let proxy = proxy.clone();
+        glib::MainContext::default().spawn_local(async move {
+            while let Ok(ev) = panel_rx.recv().await {
+                match ev {
+                    panel::indicator::PanelEvent::Activate => window.toggle(),
+                    panel::indicator::PanelEvent::ToggleIncognito => {
+                        let current = proxy.is_incognito().await.unwrap_or(false);
+                        let _ = proxy.set_incognito(!current).await;
+                    }
+                    panel::indicator::PanelEvent::Quit => std::process::exit(0),
+                }
+            }
+        });
+    }
 
     window.show();
 });
 ```
+
+Note: GNOME Shell does not render StatusNotifierItem natively. Users need the "AppIndicator and KStatusNotifierItem Support" extension (this is the same requirement the spec already assumes for tray icons on GNOME).
 
 - [ ] **Step 4: Verify it compiles**
 
@@ -1435,18 +1460,18 @@ Wire `ClipAdded`, `ClipDeleted`, and `IncognitoChanged` signals so the UI update
 
 - [ ] **Step 1: Subscribe to signals in window.rs**
 
-Add the following inside `ClipsWindow::new`, after the window is shown:
+Add the following inside `ClipsWindow::new`, right before `Self { … }`. `refresh` is the `Rc<RefCell<Box<dyn Fn()>>>` already built earlier — call it via `(refresh.borrow())()`.
 
 ```rust
 // Subscribe to ClipAdded signal
 {
     let proxy_sig = proxy.clone();
-    let refresh_sig = refresh.clone();
+    let refresh = refresh.clone();
     glib::MainContext::default().spawn_local(async move {
         use futures_util::StreamExt;
         if let Ok(mut stream) = proxy_sig.receive_clip_added().await {
-            while let Some(_) = stream.next().await {
-                refresh_sig();
+            while stream.next().await.is_some() {
+                (refresh.borrow())();
             }
         }
     });
@@ -1455,23 +1480,19 @@ Add the following inside `ClipsWindow::new`, after the window is shown:
 // Subscribe to ClipDeleted signal
 {
     let proxy_sig = proxy.clone();
-    let refresh_sig = refresh.clone();
+    let refresh = refresh.clone();
     glib::MainContext::default().spawn_local(async move {
         use futures_util::StreamExt;
         if let Ok(mut stream) = proxy_sig.receive_clip_deleted().await {
-            while let Some(_) = stream.next().await {
-                refresh_sig();
+            while stream.next().await.is_some() {
+                (refresh.borrow())();
             }
         }
     });
 }
 ```
 
-Add `futures-util = "0.3"` to `crates/gnome-clips/Cargo.toml`:
-
-```toml
-futures-util = "0.3"
-```
+(`futures-util` is already listed in the crate's Cargo.toml from Task 1.)
 
 - [ ] **Step 2: Verify it compiles**
 

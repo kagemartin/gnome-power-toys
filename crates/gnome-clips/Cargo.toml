@@ -1,0 +1,20 @@
+[package]
+name = "gnome-clips"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "gnome-clips"
+path = "src/main.rs"
+
+[dependencies]
+gtk4         = { version = "0.9", features = ["v4_12"] }
+libadwaita   = { version = "0.7", features = ["v1_5"] }
+zbus         = "4"
+ksni         = "0.2"
+futures-util = "0.3"
+async-channel = "2"
+tracing      = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror    = "1"
+serde        = { version = "1", features = ["derive"] }
