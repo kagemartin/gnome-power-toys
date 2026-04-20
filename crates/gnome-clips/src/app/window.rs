@@ -5,7 +5,6 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{ApplicationWindow, Box as GBox, EventControllerKey, Orientation, Paned, Separator};
 use libadwaita as adw;
-use libadwaita::prelude::*;
 
 use crate::app::clip_list::ClipList;
 use crate::app::filter_bar::FilterBar;
