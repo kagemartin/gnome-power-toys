@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{ApplicationWindow, Box as GBox, EventControllerKey, Orientation, Paned, Separator};
@@ -10,6 +11,7 @@ use crate::app::clip_list::ClipList;
 use crate::app::filter_bar::FilterBar;
 use crate::app::preview_pane::PreviewPane;
 use crate::dbus::ClipsProxy;
+use crate::paste::{apply as apply_clipboard, payload_for};
 
 pub struct ClipsWindow {
     pub window: ApplicationWindow,
@@ -52,54 +54,6 @@ impl ClipsWindow {
         paned.set_vexpand(true);
         vbox.append(&paned);
         window.set_child(Some(&vbox));
-
-        // Keyboard shortcuts.
-        let key_controller = EventControllerKey::new();
-        {
-            let window_ref = window.clone();
-            let proxy_ref = proxy.clone();
-            let clip_list_ref = clip_list.clone();
-            key_controller.connect_key_pressed(move |_, key, _, modifier| {
-                use gtk4::gdk::{Key, ModifierType};
-                let ctrl = modifier.contains(ModifierType::CONTROL_MASK);
-                match (key, ctrl) {
-                    (Key::Escape, _) => {
-                        window_ref.set_visible(false);
-                        glib::Propagation::Stop
-                    }
-                    (Key::Delete, _) => {
-                        if let Some(id) = clip_list_ref.selected_clip_id() {
-                            let proxy = proxy_ref.clone();
-                            glib::MainContext::default().spawn_local(async move {
-                                let _ = proxy.delete_clip(id).await;
-                            });
-                        }
-                        glib::Propagation::Stop
-                    }
-                    (Key::p, true) => {
-                        if let Some(id) = clip_list_ref.selected_clip_id() {
-                            let proxy = proxy_ref.clone();
-                            glib::MainContext::default().spawn_local(async move {
-                                if let Ok(detail) = proxy.get_clip(id).await {
-                                    let _ = proxy.set_pinned(id, !detail.pinned).await;
-                                }
-                            });
-                        }
-                        glib::Propagation::Stop
-                    }
-                    (Key::i, true) => {
-                        let proxy = proxy_ref.clone();
-                        glib::MainContext::default().spawn_local(async move {
-                            let current = proxy.is_incognito().await.unwrap_or(false);
-                            let _ = proxy.set_incognito(!current).await;
-                        });
-                        glib::Propagation::Stop
-                    }
-                    _ => glib::Propagation::Proceed,
-                }
-            });
-        }
-        window.add_controller(key_controller);
 
         let refresh: Rc<RefCell<Box<dyn Fn()>>> = {
             let proxy = proxy.clone();
@@ -218,13 +172,106 @@ impl ClipsWindow {
             });
         }
 
-        // Paste button: polish pass will wire wl-clipboard; for now, hide window.
+        // One paste closure, shared by the paste button, row-activation
+        // (double-click / Enter on a focused row) and the Enter key on
+        // the window. Fetches the full clip from the daemon, writes the
+        // bytes to the system clipboard under the right MIME, and hides
+        // the window so the user can Ctrl+V into the target app.
+        let paste: Rc<dyn Fn(i64) + 'static> = {
+            let window = window.clone();
+            let proxy = proxy.clone();
+            Rc::new(move |id: i64| {
+                let window = window.clone();
+                let proxy = proxy.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    match proxy.get_clip(id).await {
+                        Ok(detail) => {
+                            if let Some(display) = gdk::Display::default() {
+                                let payload = payload_for(&detail.content_type, &detail.content);
+                                apply_clipboard(&display.clipboard(), payload);
+                            } else {
+                                tracing::warn!("no default gdk::Display — cannot paste");
+                            }
+                        }
+                        Err(e) => tracing::warn!(error = %e, "get_clip failed during paste"),
+                    }
+                    window.set_visible(false);
+                });
+            })
+        };
+
+        // Paste button.
         {
-            let window_paste = window.clone();
+            let paste = paste.clone();
+            let selected_id = selected_id.clone();
             preview.paste_btn.connect_clicked(move |_| {
-                window_paste.set_visible(false);
+                if let Some(id) = selected_id.get() {
+                    paste(id);
+                }
             });
         }
+
+        // Double-click / Enter on a row → paste.
+        {
+            let paste = paste.clone();
+            clip_list.connect_row_activated(move |id| paste(id));
+        }
+
+        // Keyboard shortcuts. Installed AFTER `paste` is built so Enter
+        // can fall through to it when focus isn't on the ListBox row.
+        let key_controller = EventControllerKey::new();
+        {
+            let window_ref = window.clone();
+            let proxy_ref = proxy.clone();
+            let clip_list_ref = clip_list.clone();
+            let paste = paste.clone();
+            key_controller.connect_key_pressed(move |_, key, _, modifier| {
+                use gtk4::gdk::{Key, ModifierType};
+                let ctrl = modifier.contains(ModifierType::CONTROL_MASK);
+                match (key, ctrl) {
+                    (Key::Escape, _) => {
+                        window_ref.set_visible(false);
+                        glib::Propagation::Stop
+                    }
+                    (Key::Return | Key::KP_Enter, false) => {
+                        if let Some(id) = clip_list_ref.selected_clip_id() {
+                            paste(id);
+                        }
+                        glib::Propagation::Stop
+                    }
+                    (Key::Delete, _) => {
+                        if let Some(id) = clip_list_ref.selected_clip_id() {
+                            let proxy = proxy_ref.clone();
+                            glib::MainContext::default().spawn_local(async move {
+                                let _ = proxy.delete_clip(id).await;
+                            });
+                        }
+                        glib::Propagation::Stop
+                    }
+                    (Key::p, true) => {
+                        if let Some(id) = clip_list_ref.selected_clip_id() {
+                            let proxy = proxy_ref.clone();
+                            glib::MainContext::default().spawn_local(async move {
+                                if let Ok(detail) = proxy.get_clip(id).await {
+                                    let _ = proxy.set_pinned(id, !detail.pinned).await;
+                                }
+                            });
+                        }
+                        glib::Propagation::Stop
+                    }
+                    (Key::i, true) => {
+                        let proxy = proxy_ref.clone();
+                        glib::MainContext::default().spawn_local(async move {
+                            let current = proxy.is_incognito().await.unwrap_or(false);
+                            let _ = proxy.set_incognito(!current).await;
+                        });
+                        glib::Propagation::Stop
+                    }
+                    _ => glib::Propagation::Proceed,
+                }
+            });
+        }
+        window.add_controller(key_controller);
 
         // Live updates — ClipAdded / ClipDeleted refresh the list.
         {

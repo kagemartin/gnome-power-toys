@@ -19,6 +19,9 @@ impl ClipList {
     pub fn new() -> Self {
         let list_box = ListBox::new();
         list_box.set_selection_mode(SelectionMode::Single);
+        // Single-click previews (row-selected); double-click / Enter
+        // activates (row-activated) → paste + close.
+        list_box.set_activate_on_single_click(false);
         list_box.add_css_class("navigation-sidebar");
 
         let scroll = ScrolledWindow::builder()
@@ -80,6 +83,17 @@ impl ClipList {
 
     pub fn selected_clip_id(&self) -> Option<i64> {
         self.list_box.selected_row().and_then(|r| row_clip_id(&r))
+    }
+
+    pub fn connect_row_activated<F>(&self, f: F)
+    where
+        F: Fn(i64) + 'static,
+    {
+        self.list_box.connect_row_activated(move |_, row| {
+            if let Some(id) = row_clip_id(row) {
+                f(id);
+            }
+        });
     }
 }
 

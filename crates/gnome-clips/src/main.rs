@@ -2,6 +2,7 @@ mod app;
 mod dbus;
 mod error;
 mod panel;
+mod paste;
 mod shortcut;
 mod util;
 
