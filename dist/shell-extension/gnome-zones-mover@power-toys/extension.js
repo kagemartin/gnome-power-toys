@@ -129,6 +129,25 @@ export default class GnomeZonesMoverExtension extends Extension {
                 win.unmake_fullscreen();
             }
             win.move_resize_frame(true, x, y, w, h);
+            // Apps with size-hint increments (gnome-terminal, urxvt) may
+            // counter-propose a rounded size during the configure
+            // negotiation, and mutter can honour that rounded size while
+            // leaving the window at its *previous* position. Force the
+            // intended position after the size settles so the window
+            // actually lands in the target zone. Scheduled via idle so
+            // mutter has a chance to complete the resize first.
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                try {
+                    if (!win.get_compositor_private()) return GLib.SOURCE_REMOVE;
+                    const frame = win.get_frame_rect();
+                    if (frame.x !== x || frame.y !== y) {
+                        win.move_frame(true, x, y);
+                    }
+                } catch (_e) {
+                    // Window may have died between calls; ignore.
+                }
+                return GLib.SOURCE_REMOVE;
+            });
             return true;
         } catch (e) {
             logError(e, '[gnome-zones-mover] MoveResizeWindow failed');
