@@ -103,6 +103,44 @@ impl EditorState {
         }
         self.zones = reordered;
     }
+
+    /// Split the selected zone into top/bottom halves. No-op if nothing selected.
+    pub fn split_horizontal(&mut self) {
+        let Some(idx) = self.selected else { return; };
+        let Some(pos) = self.zones.iter().position(|z| z.zone_index == idx) else { return; };
+
+        let z = self.zones[pos];
+        let half = z.h / 2.0;
+        let top = Zone { zone_index: 0, x: z.x, y: z.y,          w: z.w, h: half };
+        let bot = Zone { zone_index: 0, x: z.x, y: z.y + half,   w: z.w, h: half };
+
+        self.zones.remove(pos);
+        self.zones.push(top);
+        self.zones.push(bot);
+        self.renumber_row_major();
+        if let Some(t) = self.zones.iter().find(|zz| (zz.x - top.x).abs() < 1e-9 && (zz.y - top.y).abs() < 1e-9) {
+            self.selected = Some(t.zone_index);
+        }
+    }
+
+    /// Split the selected zone into left/right halves. No-op if nothing selected.
+    pub fn split_vertical(&mut self) {
+        let Some(idx) = self.selected else { return; };
+        let Some(pos) = self.zones.iter().position(|z| z.zone_index == idx) else { return; };
+
+        let z = self.zones[pos];
+        let half = z.w / 2.0;
+        let left  = Zone { zone_index: 0, x: z.x,         y: z.y, w: half, h: z.h };
+        let right = Zone { zone_index: 0, x: z.x + half,  y: z.y, w: half, h: z.h };
+
+        self.zones.remove(pos);
+        self.zones.push(left);
+        self.zones.push(right);
+        self.renumber_row_major();
+        if let Some(l) = self.zones.iter().find(|zz| (zz.x - left.x).abs() < 1e-9 && (zz.y - left.y).abs() < 1e-9) {
+            self.selected = Some(l.zone_index);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -192,5 +230,48 @@ mod tests {
         assert!(!s.is_dirty());
         assert_eq!(s.name, "Two Columns");
         assert_eq!(s.zones[0].w, 0.5);
+    }
+
+    #[test]
+    fn split_horizontal_selected_zone() {
+        let mut s = EditorState::from_layout(&two_col_layout());
+        s.select(1);
+        s.split_horizontal();
+        assert_eq!(s.zones.len(), 3);
+        let top = s.zones.iter().find(|z| z.x == 0.0 && z.y == 0.0).unwrap();
+        let bot = s.zones.iter().find(|z| z.x == 0.0 && (z.y - 0.5).abs() < 1e-9).unwrap();
+        assert!((top.h - 0.5).abs() < 1e-9);
+        assert!((bot.h - 0.5).abs() < 1e-9);
+        assert!((top.w - 0.5).abs() < 1e-9);
+        assert_eq!(s.selected, Some(1));
+    }
+
+    #[test]
+    fn split_vertical_selected_zone() {
+        let mut s = EditorState::from_layout(&two_col_layout());
+        s.select(1);
+        s.split_vertical();
+        assert_eq!(s.zones.len(), 3);
+        let left = s.zones.iter().find(|z| z.x == 0.0).unwrap();
+        let mid  = s.zones.iter().find(|z| (z.x - 0.25).abs() < 1e-9).unwrap();
+        assert!((left.w - 0.25).abs() < 1e-9);
+        assert!((mid.w  - 0.25).abs() < 1e-9);
+        assert!((left.h - 1.0).abs()  < 1e-9);
+    }
+
+    #[test]
+    fn split_without_selection_is_noop() {
+        let mut s = EditorState::from_layout(&two_col_layout());
+        s.selected = None;
+        s.split_horizontal();
+        assert_eq!(s.zones.len(), 2);
+    }
+
+    #[test]
+    fn split_marks_dirty() {
+        let mut s = EditorState::from_layout(&two_col_layout());
+        assert!(!s.is_dirty());
+        s.split_vertical();
+        assert!(s.is_dirty());
     }
 }
