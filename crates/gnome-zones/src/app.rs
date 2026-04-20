@@ -26,7 +26,7 @@ pub fn build_app() -> gtk4::Application {
         .build();
 
     let provider = gtk4::CssProvider::new();
-    provider.load_from_data(
+    provider.load_from_string(
         ".gnome-zones-overlay { background: rgba(0, 0, 0, 0); }\n\
          .gnome-zones-editor-backdrop { background: rgba(0, 0, 0, 0.85); }\n\
          .gnome-zones-zone { background: rgba(60, 120, 220, 0.25); \
