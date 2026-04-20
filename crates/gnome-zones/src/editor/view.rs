@@ -296,6 +296,14 @@ impl EditorView {
         }
     }
 
+    /// Tear down and rebuild the toolbar (e.g. after Save-as adds a new layout).
+    fn rebuild_toolbar(self: &Rc<Self>, all_layouts: &[LayoutSummaryWire]) {
+        while let Some(child) = self.toolbar_container.first_child() {
+            self.toolbar_container.remove(&child);
+        }
+        self.build_toolbar(all_layouts);
+    }
+
     fn wire_canvas_drag(self: &Rc<Self>) {
         use gtk4::GestureDrag;
 
@@ -479,14 +487,14 @@ impl EditorView {
                     match proxy.create_layout(&state.name, zones).await {
                         Ok(id) => id,
                         Err(e) => {
-                            tracing::warn!(error = %e, "apply: create failed");
-                            return;
+                            tracing::error!(error = %e, "apply: create failed (preset fork)");
+                            return; // window stays open
                         }
                     }
                 } else {
                     if let Err(e) = proxy.update_layout(id, &state.name, zones).await {
-                        tracing::warn!(error = %e, "apply: update failed");
-                        return;
+                        tracing::error!(error = %e, "apply: update failed");
+                        return; // window stays open
                     }
                     id
                 }
@@ -494,13 +502,14 @@ impl EditorView {
                 match proxy.create_layout(&state.name, zones).await {
                     Ok(id) => id,
                     Err(e) => {
-                        tracing::warn!(error = %e, "apply: create failed");
-                        return;
+                        tracing::error!(error = %e, "apply: create failed");
+                        return; // window stays open
                     }
                 }
             };
             if let Err(e) = proxy.assign_layout(&monitor_key, id).await {
-                tracing::warn!(error = %e, "apply: assign failed");
+                tracing::error!(error = %e, "apply: assign failed — layout saved but not activated");
+                return; // window stays open; user can inspect and retry
             }
             window.close();
         });
@@ -540,14 +549,18 @@ impl EditorView {
                 gtk4::glib::MainContext::default().spawn_local(async move {
                     match proxy.create_layout(&name, zones).await {
                         Ok(id) => {
-                            if let Some(v) = view_.upgrade() {
-                                match proxy.get_layout(id).await {
-                                    Ok(layout) => {
-                                        *v.state.borrow_mut() = EditorState::from_layout(&layout);
-                                        v.rerender();
-                                    }
-                                    Err(e) => tracing::warn!(error = %e, "save_as: get_layout failed"),
+                            let Some(v) = view_.upgrade() else { return; };
+                            match proxy.get_layout(id).await {
+                                Ok(layout) => {
+                                    *v.state.borrow_mut() = EditorState::from_layout(&layout);
+                                    v.rerender();
                                 }
+                                Err(e) => tracing::warn!(error = %e, "save_as: get_layout failed"),
+                            }
+                            // Refresh dropdown so the new layout appears.
+                            match proxy.list_layouts().await {
+                                Ok(layouts) => v.rebuild_toolbar(&layouts),
+                                Err(e) => tracing::warn!(error = %e, "save_as: list_layouts refresh failed"),
                             }
                         }
                         Err(e) => tracing::warn!(error = %e, "save_as: create_layout failed"),
