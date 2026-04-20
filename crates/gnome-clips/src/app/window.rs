@@ -227,6 +227,32 @@ impl ClipsWindow {
             });
         }
 
+        // Live updates — ClipAdded / ClipDeleted refresh the list.
+        {
+            let proxy_sig = proxy.clone();
+            let refresh = refresh.clone();
+            glib::MainContext::default().spawn_local(async move {
+                use futures_util::StreamExt;
+                if let Ok(mut stream) = proxy_sig.receive_clip_added().await {
+                    while stream.next().await.is_some() {
+                        (refresh.borrow())();
+                    }
+                }
+            });
+        }
+        {
+            let proxy_sig = proxy.clone();
+            let refresh = refresh.clone();
+            glib::MainContext::default().spawn_local(async move {
+                use futures_util::StreamExt;
+                if let Ok(mut stream) = proxy_sig.receive_clip_deleted().await {
+                    while stream.next().await.is_some() {
+                        (refresh.borrow())();
+                    }
+                }
+            });
+        }
+
         // Initial load.
         (refresh.borrow())();
 
