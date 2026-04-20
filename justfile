@@ -57,3 +57,11 @@ build-flatpak:
 # Build both the .deb suite and the Flatpak.
 build-all:
     BUILD_EXTRA=-d ./scripts/build-packages.sh --all
+
+# Build the .deb suite and install it locally via apt (uses sudo).
+install-deb: build-deb
+    sudo apt install -y --reinstall \
+        ../gnome-clips_*.deb \
+        ../gnome-zones_*.deb \
+        ../gnome-power-toys-extensions_*.deb \
+        ../gnome-power-toys_*.deb
