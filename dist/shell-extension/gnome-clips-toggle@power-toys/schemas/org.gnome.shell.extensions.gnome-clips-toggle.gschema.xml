@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.gnome-clips-toggle"
+          path="/org/gnome/shell/extensions/gnome-clips-toggle/">
+
+    <key name="toggle" type="as">
+      <default><![CDATA[['<Super>v']]]></default>
+      <summary>Show / hide the clipboard history popup</summary>
+      <description/>
+    </key>
+
+  </schema>
+</schemalist>

@@ -1,0 +1,8 @@
+{
+    "uuid": "gnome-clips-toggle@power-toys",
+    "name": "gnome-clips Toggle",
+    "description": "Registers the Super+V hotkey and toggles the gnome-clips popup via D-Bus. No UI. Not intended for standalone use.",
+    "shell-version": ["45", "46", "47"],
+    "url": "https://github.com/gnome-power-toys/gnome-clips",
+    "settings-schema": "org.gnome.shell.extensions.gnome-clips-toggle"
+}
