@@ -116,12 +116,14 @@ export default class GnomeClipsToggleExtension extends Extension {
     }
 
     // D-Bus: called by gnome-clips right after it writes the selected
-    // clip to the system clipboard and hides the popup. We need to
-    // (a) restore focus to the window the user was in before Super+V,
-    // and (b) deliver a Shift+Insert so the app actually pastes.
+    // clip to the system clipboard and hides the popup. Restore focus
+    // to the window the user was in before Super+V, then synthesize the
+    // paste shortcut appropriate for that window type.
     InjectPaste() {
         const target = this._preFocused;
         this._preFocused = null;
+
+        const useShiftCtrl = isTerminal(target);
 
         if (target && !target.is_hidden()) {
             const now = global.display.get_current_time_roundtrip();
@@ -136,22 +138,55 @@ export default class GnomeClipsToggleExtension extends Extension {
         // One main-loop idle pass is usually enough; a 30 ms timeout is
         // a conservative upper bound.
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30, () => {
-            this._synthesizeShiftInsert();
+            this._synthesizePaste(useShiftCtrl);
             return GLib.SOURCE_REMOVE;
         });
     }
 
-    _synthesizeShiftInsert() {
+    // Sends Ctrl+V (GUI apps) or Ctrl+Shift+V (terminals). Shift+Insert
+    // is not portable: VTE terminals map it to PRIMARY selection, so we
+    // avoid it entirely.
+    _synthesizePaste(useShiftCtrl) {
         try {
             const seat = Clutter.get_default_backend().get_default_seat();
             const vdev = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
             const t = Clutter.get_current_event_time();
-            vdev.notify_keyval(t, Clutter.KEY_Shift_L, Clutter.KeyState.PRESSED);
-            vdev.notify_keyval(t, Clutter.KEY_Insert,  Clutter.KeyState.PRESSED);
-            vdev.notify_keyval(t, Clutter.KEY_Insert,  Clutter.KeyState.RELEASED);
-            vdev.notify_keyval(t, Clutter.KEY_Shift_L, Clutter.KeyState.RELEASED);
+
+            vdev.notify_keyval(t, Clutter.KEY_Control_L, Clutter.KeyState.PRESSED);
+            if (useShiftCtrl) {
+                vdev.notify_keyval(t, Clutter.KEY_Shift_L, Clutter.KeyState.PRESSED);
+            }
+            vdev.notify_keyval(t, Clutter.KEY_v, Clutter.KeyState.PRESSED);
+            vdev.notify_keyval(t, Clutter.KEY_v, Clutter.KeyState.RELEASED);
+            if (useShiftCtrl) {
+                vdev.notify_keyval(t, Clutter.KEY_Shift_L, Clutter.KeyState.RELEASED);
+            }
+            vdev.notify_keyval(t, Clutter.KEY_Control_L, Clutter.KeyState.RELEASED);
         } catch (e) {
             logError(e, '[gnome-clips-toggle] key injection failed');
         }
     }
+}
+
+// Heuristic — terminals treat Ctrl+V as verbatim-insert, not paste, and
+// expect Ctrl+Shift+V instead. Match the common VTE/Konsole/etc. wm
+// classes; everything else gets Ctrl+V.
+function isTerminal(win) {
+    if (!win) return false;
+    const cls = (win.get_wm_class() || '').toLowerCase();
+    const name = (win.get_wm_class_instance?.() || '').toLowerCase();
+    const s = cls + ' ' + name;
+    const matchers = [
+        'terminal',  // gnome-terminal, xfce4-terminal, lxterminal, etc.
+        'xterm',
+        'konsole',
+        'alacritty',
+        'kitty',
+        'tilix',
+        'wezterm',
+        'rxvt',
+        'foot',
+        'ptyxis',
+    ];
+    return matchers.some(m => s.includes(m));
 }
