@@ -20,7 +20,10 @@ pub fn show(
         tracing::warn!("activator: no default display; cannot show overlay");
         return;
     };
-    let monitor = monitor_for_key(&display, &monitor_key);
+    let Some(monitor) = monitor_for_key(&display, &monitor_key) else {
+        tracing::warn!("activator: no monitors; cannot show overlay");
+        return;
+    };
 
     let window = build_overlay(app, &monitor, KeyMode::OnDemand);
     window.set_title(Some("gnome-zones activator"));

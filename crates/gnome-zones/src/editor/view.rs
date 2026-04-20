@@ -28,11 +28,9 @@ impl EditorView {
         monitor_key: String,
         layout: LayoutWire,
         all_layouts: Vec<LayoutSummaryWire>,
-    ) -> Rc<Self> {
-        let Some(display) = gdk::Display::default() else {
-            panic!("editor: no default display");
-        };
-        let monitor = monitor_for_key(&display, &monitor_key);
+    ) -> Option<Rc<Self>> {
+        let display = gdk::Display::default()?;
+        let monitor = monitor_for_key(&display, &monitor_key)?;
         let geo = monitor.geometry();
         let monitor_w = geo.width();
         let monitor_h = geo.height();
@@ -76,7 +74,7 @@ impl EditorView {
         view.build_toolbar(&all_layouts);
         view.wire_canvas_drag();
         view.rerender();
-        view
+        Some(view)
     }
 
     /// Rebuild all zone rectangles + divider handles from scratch.
@@ -600,7 +598,10 @@ pub fn show(
             }
         };
         let Some(app) = app_weak.upgrade() else { return; };
-        let view = EditorView::new(&app, proxy, mk, active, layouts);
+        let Some(view) = EditorView::new(&app, proxy, mk, active, layouts) else {
+            tracing::warn!("editor: failed to build view (no display or monitors)");
+            return;
+        };
         view.window.present();
     });
 }

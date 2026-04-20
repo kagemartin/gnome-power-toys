@@ -48,19 +48,22 @@ pub fn build_overlay(
 
 /// Resolve a `gdk::Monitor` for a `monitor_key` produced by the daemon.
 /// Matches by connector name (first token of `monitor_key`).
-pub fn monitor_for_key(display: &gdk::Display, monitor_key: &str) -> gdk::Monitor {
+///
+/// Returns `None` when GDK reports no monitors (headless, display closed
+/// mid-session, etc.). Callers must handle this gracefully rather than
+/// panicking — the process stays alive even without a presentable monitor.
+pub fn monitor_for_key(display: &gdk::Display, monitor_key: &str) -> Option<gdk::Monitor> {
     let connector = monitor_key.split(':').next().unwrap_or("");
     let monitors = display.monitors();
     let n = monitors.n_items();
     for i in 0..n {
         if let Some(m) = monitors.item(i).and_then(|o| o.downcast::<gdk::Monitor>().ok()) {
             if m.connector().map(|s| s.as_str() == connector).unwrap_or(false) {
-                return m;
+                return Some(m);
             }
         }
     }
     monitors
         .item(0)
         .and_then(|o| o.downcast::<gdk::Monitor>().ok())
-        .expect("no monitors")
 }

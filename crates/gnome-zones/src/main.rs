@@ -194,30 +194,47 @@ fn run_panel_mode(
             });
         }
 
+        // All four signal subscriptions below wrap their subscribe+consume
+        // block in an outer `loop` so that if the daemon restarts (stream
+        // terminates) or subscription fails, we back off 1s and re-subscribe.
+        // Each loop also breaks when the GtkApplication is dropped.
+
         // --- ActivatorRequested signal → open activator -------------------
         {
             let proxy = proxy.clone();
             let app_weak = app_weak.clone();
             gtk4::glib::MainContext::default().spawn_local(async move {
-                match proxy.receive_activator_requested().await {
-                    Ok(mut stream) => {
-                        while let Some(sig) = stream.next().await {
-                            let Some(app) = app_weak.upgrade() else {
-                                break;
-                            };
-                            if let Ok(args) = sig.args() {
-                                let mk = args.monitor_key.clone();
-                                let proxy = proxy.clone();
-                                let app = app.clone();
-                                gtk4::glib::MainContext::default().spawn_local(async move {
-                                    let paused = is_paused(&proxy).await;
-                                    activator::show(&app, proxy, mk, paused);
-                                });
+                loop {
+                    match proxy.receive_activator_requested().await {
+                        Ok(mut stream) => {
+                            while let Some(sig) = stream.next().await {
+                                let Some(app) = app_weak.upgrade() else {
+                                    return;
+                                };
+                                if let Ok(args) = sig.args() {
+                                    let mk = args.monitor_key.clone();
+                                    let proxy = proxy.clone();
+                                    let app = app.clone();
+                                    gtk4::glib::MainContext::default().spawn_local(async move {
+                                        let paused = is_paused(&proxy).await;
+                                        activator::show(&app, proxy, mk, paused);
+                                    });
+                                }
                             }
+                            tracing::warn!(
+                                "ActivatorRequested stream terminated; will re-subscribe in 1s"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "failed to subscribe to ActivatorRequested; retrying in 1s"
+                            );
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to subscribe to ActivatorRequested");
+                    gtk4::glib::timeout_future_seconds(1).await;
+                    if app_weak.upgrade().is_none() {
+                        break;
                     }
                 }
             });
@@ -228,24 +245,36 @@ fn run_panel_mode(
             let proxy = proxy.clone();
             let app_weak = app_weak.clone();
             gtk4::glib::MainContext::default().spawn_local(async move {
-                match proxy.receive_editor_requested().await {
-                    Ok(mut stream) => {
-                        while let Some(sig) = stream.next().await {
-                            let Some(app) = app_weak.upgrade() else {
-                                break;
-                            };
-                            if let Ok(args) = sig.args() {
-                                let mk = args.monitor_key.clone();
-                                let proxy = proxy.clone();
-                                let app = app.clone();
-                                gtk4::glib::MainContext::default().spawn_local(async move {
-                                    editor::show(&app, proxy, mk);
-                                });
+                loop {
+                    match proxy.receive_editor_requested().await {
+                        Ok(mut stream) => {
+                            while let Some(sig) = stream.next().await {
+                                let Some(app) = app_weak.upgrade() else {
+                                    return;
+                                };
+                                if let Ok(args) = sig.args() {
+                                    let mk = args.monitor_key.clone();
+                                    let proxy = proxy.clone();
+                                    let app = app.clone();
+                                    gtk4::glib::MainContext::default().spawn_local(async move {
+                                        editor::show(&app, proxy, mk);
+                                    });
+                                }
                             }
+                            tracing::warn!(
+                                "EditorRequested stream terminated; will re-subscribe in 1s"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "failed to subscribe to EditorRequested; retrying in 1s"
+                            );
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to subscribe to EditorRequested");
+                    gtk4::glib::timeout_future_seconds(1).await;
+                    if app_weak.upgrade().is_none() {
+                        break;
                     }
                 }
             });
@@ -255,17 +284,30 @@ fn run_panel_mode(
         {
             let proxy = proxy.clone();
             let indicator = indicator.clone();
+            let app_weak = app_weak.clone();
             gtk4::glib::MainContext::default().spawn_local(async move {
-                match proxy.receive_paused_changed().await {
-                    Ok(mut stream) => {
-                        while let Some(sig) = stream.next().await {
-                            if let Ok(args) = sig.args() {
-                                indicator.set_paused(args.paused);
+                loop {
+                    match proxy.receive_paused_changed().await {
+                        Ok(mut stream) => {
+                            while let Some(sig) = stream.next().await {
+                                if let Ok(args) = sig.args() {
+                                    indicator.set_paused(args.paused);
+                                }
                             }
+                            tracing::warn!(
+                                "PausedChanged stream terminated; will re-subscribe in 1s"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "failed to subscribe to PausedChanged; retrying in 1s"
+                            );
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to subscribe to PausedChanged");
+                    gtk4::glib::timeout_future_seconds(1).await;
+                    if app_weak.upgrade().is_none() {
+                        break;
                     }
                 }
             });
@@ -275,20 +317,33 @@ fn run_panel_mode(
         {
             let proxy = proxy.clone();
             let indicator = indicator.clone();
+            let app_weak = app_weak.clone();
             gtk4::glib::MainContext::default().spawn_local(async move {
-                match proxy.receive_layouts_changed().await {
-                    Ok(mut stream) => {
-                        while stream.next().await.is_some() {
-                            match proxy.list_layouts().await {
-                                Ok(layouts) => indicator.set_layouts(layouts),
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "failed to refresh layouts");
+                loop {
+                    match proxy.receive_layouts_changed().await {
+                        Ok(mut stream) => {
+                            while stream.next().await.is_some() {
+                                match proxy.list_layouts().await {
+                                    Ok(layouts) => indicator.set_layouts(layouts),
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "failed to refresh layouts");
+                                    }
                                 }
                             }
+                            tracing::warn!(
+                                "LayoutsChanged stream terminated; will re-subscribe in 1s"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "failed to subscribe to LayoutsChanged; retrying in 1s"
+                            );
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to subscribe to LayoutsChanged");
+                    gtk4::glib::timeout_future_seconds(1).await;
+                    if app_weak.upgrade().is_none() {
+                        break;
                     }
                 }
             });
