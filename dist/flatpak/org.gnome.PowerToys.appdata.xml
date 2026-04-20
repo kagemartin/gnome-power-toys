@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.gnome.PowerToys</id>
+  <name>GNOME Power Toys</name>
+  <summary>A productivity tool suite for GNOME</summary>
+  <description>
+    <p>
+      GNOME Power Toys bundles the following utilities:
+    </p>
+    <ul>
+      <li>gnome-clips — clipboard history manager (Super+V).</li>
+      <li>gnome-zones — window-zone layout manager.</li>
+    </ul>
+    <p>
+      Each tool appears as its own launcher. The Super+V hotkey for
+      gnome-clips, and the zone-editing hotkey for gnome-zones, are
+      registered by companion GNOME Shell extensions. Shell extensions
+      cannot live inside a Flatpak sandbox; install them with
+      'apt install gnome-power-toys-extensions' on Debian/Ubuntu, or
+      copy them from the 'gnome-power-toys/extensions/' resource directory
+      inside this Flatpak into '~/.local/share/gnome-shell/extensions/'.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/gnome-power-toys/gnome-power-toys</url>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <releases>
+    <release version="0.1.0" date="2026-04-20"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <id>org.gnome.PowerToys.Clips.desktop</id>
+    <id>org.gnome.PowerToys.Zones.desktop</id>
+  </provides>
+</component>

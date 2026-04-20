@@ -1,0 +1,7 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: gnome-power-toys
+Source: https://github.com/gnome-power-toys/gnome-power-toys
+
+Files: *
+Copyright: 2026 gnome-power-toys contributors
+License: MIT

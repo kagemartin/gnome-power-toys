@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=gnome-zones
+Comment=Window-zone layout manager
+Exec=gnome-zones
+Icon=org.gnome.PowerToys.Zones
+Terminal=false
+Type=Application
+Categories=Utility;GTK;
+StartupNotify=true

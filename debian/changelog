@@ -1,0 +1,5 @@
+gnome-power-toys (0.1.0-1) unstable; urgency=low
+
+  * Initial release. Includes gnome-clips and gnome-zones.
+
+ -- gnome-power-toys contributors <noreply@example.com>  Mon, 20 Apr 2026 00:00:00 +0000

@@ -1,4 +1,10 @@
-# gnome-clips Packaging Implementation Plan
+# gnome-clips Packaging Implementation Plan — SUPERSEDED
+
+> **Status (2026-04-20):** Superseded by **`docs/superpowers/plans/2026-04-20-gnome-power-toys-packaging.md`**. This plan packaged gnome-clips as its own Debian source package and its own Flatpak (`org.gnome.Clips`); that violates the "one repo, one unit of release" rule for the gnome-power-toys monorepo. Do not execute this plan. See `docs/superpowers/specs/2026-04-20-gnome-power-toys-packaging.md` for the authoritative packaging design.
+
+---
+
+# gnome-clips Packaging Implementation Plan (historical)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

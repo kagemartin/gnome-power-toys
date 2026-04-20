@@ -406,22 +406,13 @@ This is **not** the drag-to-snap extension (that's deferred to v2); it's strictl
 
 ## 9. Packaging
 
-### Flatpak (`org.gnome.Zones`)
+Packaging for every tool in this monorepo is covered by the authoritative spec **`docs/superpowers/specs/2026-04-20-gnome-power-toys-packaging.md`**. Short version for gnome-zones:
 
-- Sandboxed; `gnome-zones-daemon` runs as a background portal consumer (Background portal for auto-start)
-- `gnome-zones` UI runs as the foreground app
-- Manifest in `dist/flatpak/`
-- The Shell-extension shim is shipped as a separate download referenced from the Flatpak metadata; user grants permission on first run (one-shot prompt)
+- Ships as the `gnome-zones` binary package inside the `gnome-power-toys` Debian source package, with the `gnome-zones-mover@power-toys` Shell-extension shim delivered by the `gnome-power-toys-extensions` binary package. Users install via `apt install gnome-zones` (which pulls the extensions package as a dependency) or via the `gnome-power-toys` metapackage.
+- Inside the unified `org.gnome.PowerToys` Flatpak, the zones UI and daemon are installed to `/app/bin/gnome-zones` and `/app/libexec/gnome-zones-daemon`; the launcher appears as `org.gnome.PowerToys.Zones.desktop`; the daemon is D-Bus–activated on the `org.gnome.Zones` well-known name.
+- Default hotkeys are registered by the `gnome-zones-mover@power-toys` GNOME Shell extension's own schema, not by a media-keys GSettings override.
 
-### Debian package (`.deb`)
-
-- Installs both binaries to `/usr/bin/`
-- Installs systemd user unit to `/usr/lib/systemd/user/gnome-zones-daemon.service`
-- Installs the Shell-extension shim to `/usr/share/gnome-shell/extensions/gnome-zones-mover@power-toys/`
-- Registers default hotkeys via gsettings override in `/usr/share/glib-2.0/schemas/`
-- Post-install: `systemctl --user enable --now gnome-zones-daemon` + `gnome-extensions enable gnome-zones-mover@power-toys`
-
-Both packages are built from the same Rust workspace. CI produces both artifacts on each release tag (matching the `gnome-clips` pipeline).
+The earlier text in this section (a tool-specific `org.gnome.Zones` Flatpak and a standalone `gnome-zones` `.deb` built from its own source package) is superseded and should not be implemented.
 
 ---
 

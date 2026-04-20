@@ -1,0 +1,66 @@
+#!/usr/bin/make -f
+export DH_VERBOSE = 1
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --workspace
+
+override_dh_auto_test:
+	cargo test --workspace
+
+# Some dev machines have libgtk4-layer-shell installed under /usr/local
+# (not from apt), which makes dpkg-shlibdeps fail to find a backing package.
+# The explicit Depends in debian/control covers the runtime requirement;
+# --ignore-missing-info lets the local build succeed regardless of layout.
+override_dh_shlibdeps:
+	dh_shlibdeps -- --ignore-missing-info
+
+override_dh_auto_install:
+	# gnome-clips binary package
+	install -Dm755 target/release/gnome-clips-daemon \
+		debian/gnome-clips/usr/bin/gnome-clips-daemon
+	install -Dm755 target/release/gnome-clips \
+		debian/gnome-clips/usr/bin/gnome-clips
+	install -Dm644 dist/systemd/gnome-clips-daemon.packaged.service \
+		debian/gnome-clips/usr/lib/systemd/user/gnome-clips-daemon.service
+
+	# gnome-zones binary package
+	install -Dm755 target/release/gnome-zones-daemon \
+		debian/gnome-zones/usr/bin/gnome-zones-daemon
+	install -Dm755 target/release/gnome-zones \
+		debian/gnome-zones/usr/bin/gnome-zones
+	install -Dm644 dist/systemd/gnome-zones-daemon.packaged.service \
+		debian/gnome-zones/usr/lib/systemd/user/gnome-zones-daemon.service
+
+	# gnome-power-toys-extensions binary package (Shell extensions)
+	# gnome-clips-toggle
+	install -d debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys
+	install -Dm644 dist/shell-extension/gnome-clips-toggle@power-toys/extension.js \
+		debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys/extension.js
+	install -Dm644 dist/shell-extension/gnome-clips-toggle@power-toys/metadata.json \
+		debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys/metadata.json
+	if [ -f dist/shell-extension/gnome-clips-toggle@power-toys/README.md ]; then \
+		install -Dm644 dist/shell-extension/gnome-clips-toggle@power-toys/README.md \
+			debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys/README.md ; \
+	fi
+	install -d debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys/schemas
+	install -Dm644 dist/shell-extension/gnome-clips-toggle@power-toys/schemas/*.gschema.xml \
+		debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys/schemas/
+	glib-compile-schemas debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-clips-toggle@power-toys/schemas/
+	# gnome-zones-mover
+	install -d debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-zones-mover@power-toys
+	install -Dm644 dist/shell-extension/gnome-zones-mover@power-toys/extension.js \
+		debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-zones-mover@power-toys/extension.js
+	install -Dm644 dist/shell-extension/gnome-zones-mover@power-toys/metadata.json \
+		debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-zones-mover@power-toys/metadata.json
+	if [ -f dist/shell-extension/gnome-zones-mover@power-toys/README.md ]; then \
+		install -Dm644 dist/shell-extension/gnome-zones-mover@power-toys/README.md \
+			debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-zones-mover@power-toys/README.md ; \
+	fi
+	install -d debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-zones-mover@power-toys/schemas
+	install -Dm644 dist/shell-extension/gnome-zones-mover@power-toys/schemas/*.gschema.xml \
+		debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-zones-mover@power-toys/schemas/
+	glib-compile-schemas debian/gnome-power-toys-extensions/usr/share/gnome-shell/extensions/gnome-zones-mover@power-toys/schemas/

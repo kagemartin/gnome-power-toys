@@ -1,0 +1,84 @@
+id: org.gnome.PowerToys
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+# A multi-tool bundle has to pick one default for `flatpak run org.gnome.PowerToys`.
+# Clips is the default; each tool also has its own .desktop launcher.
+command: gnome-clips
+
+# Skip AppStream validation for now — icons are not yet shipped.
+# Re-enable once real icons land under /app/share/icons/.
+appstream-compose: false
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Bundled daemons and UIs own their names on the session bus.
+  - --own-name=org.gnome.Clips
+  - --own-name=org.gnome.Clips.Ui
+  - --own-name=org.gnome.Zones
+  - --own-name=org.gnome.Zones.Ui
+  - --filesystem=xdg-data/gnome-clips:create
+  - --filesystem=xdg-data/gnome-zones:create
+  # Background portal — run while no window is open.
+  - --talk-name=org.freedesktop.portal.Background
+  # Mutter DisplayConfig — gnome-zones window move-resize.
+  - --talk-name=org.gnome.Mutter.DisplayConfig
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/gnome-power-toys/cargo
+
+modules:
+  # gtk4-layer-shell is not in the GNOME SDK — build it from source.
+  # Used by gnome-zones for its overlay / activator windows.
+  - name: gtk4-layer-shell
+    buildsystem: meson
+    config-opts:
+      - --libdir=lib
+      - -Dexamples=false
+      - -Ddocs=false
+      - -Dtests=false
+    sources:
+      - type: git
+        url: https://github.com/wmww/gtk4-layer-shell.git
+        tag: v1.3.0
+
+  - name: gnome-power-toys
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release --workspace
+      # Binaries
+      - install -Dm755 target/release/gnome-clips-daemon /app/libexec/gnome-clips-daemon
+      - install -Dm755 target/release/gnome-clips        /app/bin/gnome-clips
+      - install -Dm755 target/release/gnome-zones-daemon /app/libexec/gnome-zones-daemon
+      - install -Dm755 target/release/gnome-zones        /app/bin/gnome-zones
+      # D-Bus activation
+      - install -Dm644 dist/flatpak/org.gnome.Clips.service
+          /app/share/dbus-1/services/org.gnome.Clips.service
+      - install -Dm644 dist/flatpak/org.gnome.Zones.service
+          /app/share/dbus-1/services/org.gnome.Zones.service
+      # Desktop entries
+      - install -Dm644 dist/flatpak/org.gnome.PowerToys.Clips.desktop
+          /app/share/applications/org.gnome.PowerToys.Clips.desktop
+      - install -Dm644 dist/flatpak/org.gnome.PowerToys.Zones.desktop
+          /app/share/applications/org.gnome.PowerToys.Zones.desktop
+      # AppStream
+      - install -Dm644 dist/flatpak/org.gnome.PowerToys.appdata.xml
+          /app/share/metainfo/org.gnome.PowerToys.appdata.xml
+      # Shell extensions as a copyable resource (cannot run inside the Flatpak sandbox).
+      - install -d /app/share/gnome-power-toys/extensions
+      - cp -a dist/shell-extension/gnome-clips-toggle@power-toys
+              /app/share/gnome-power-toys/extensions/
+      - cp -a dist/shell-extension/gnome-zones-mover@power-toys
+              /app/share/gnome-power-toys/extensions/
+    sources:
+      - type: dir
+        path: ../..
+      - generated-sources.json

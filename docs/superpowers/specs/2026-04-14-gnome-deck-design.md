@@ -1142,27 +1142,12 @@ No prefix = resource fuzzy search. Palette ignores all except `>`.
 
 ## 12. Packaging
 
-### 12.1 Flatpak (`org.gnome.Deck`)
+Packaging for every tool in this monorepo is covered by the authoritative spec **`docs/superpowers/specs/2026-04-20-gnome-power-toys-packaging.md`**. Short version for gnome-deck:
 
-- Manifest: `dist/flatpak/org.gnome.Deck.yaml`.
-- Runtime: `org.gnome.Platform//46`.
-- SDK: `org.gnome.Sdk//46` + `org.freedesktop.Sdk.Extension.rust-stable`.
-- Permissions:
-  - `--filesystem=host` (unavoidable for arbitrary project roots).
-  - `--socket=pulseaudio` (bell).
-  - `--share=network` (SSH + future Web).
-  - `--talk-name=org.freedesktop.portal.*`.
-- No `--share=ipc` / `--socket=x11` — pure Wayland + session D-Bus.
-- Built-in themes embedded via `gresource`; integration snippets under `/app/share/gnome-deck/integration/`.
+- Ships as the `gnome-deck` binary package inside the `gnome-power-toys` Debian source package. No systemd unit (diverges from sibling tools — see §1). Binary at `/usr/bin/gnome-deck`; assets at `/usr/share/gnome-deck/{themes,integration,preview.css}`; desktop entry `/usr/share/applications/org.gnome.Deck.desktop` with `Exec=gnome-deck %U` and `MimeType=text/plain;text/markdown;inode/directory;`; AppStream at `/usr/share/metainfo/org.gnome.Deck.metainfo.xml`. Post-install: none — first launch does theme seeding, schema bootstrap, and the integration offer.
+- Inside the unified `org.gnome.PowerToys` Flatpak, the deck binary is installed to `/app/bin/gnome-deck`; the launcher appears as `org.gnome.PowerToys.Deck.desktop`. Deck-specific finish-args (`--filesystem=host` for arbitrary project roots, `--socket=pulseaudio` for the bell, `--share=network` for SSH) are unioned with the other tools' finish-args in the central manifest.
 
-### 12.2 Debian package (`gnome-deck`)
-
-- Binary: `/usr/bin/gnome-deck`.
-- Assets: `/usr/share/gnome-deck/{themes,integration,preview.css}`.
-- Desktop entry: `/usr/share/applications/org.gnome.Deck.desktop` with `Exec=gnome-deck %U`, `MimeType=text/plain;text/markdown;inode/directory;`.
-- AppStream: `/usr/share/metainfo/org.gnome.Deck.metainfo.xml`.
-- No systemd unit (diverges from siblings — §1 rationale).
-- Post-install: none. First launch does theme seeding, schema bootstrap, integration offer.
+The earlier tool-specific `.deb`/Flatpak text in this section is superseded and should not be implemented.
 
 ### 12.3 CI build matrix
 
@@ -1170,13 +1155,13 @@ No prefix = resource fuzzy search. Palette ignores all except `>`.
 - `cargo clippy --workspace --all-targets -- -D warnings`.
 - `cargo fmt --check`.
 - `cargo deny check`.
-- Flatpak build via `flatpak-builder --ci-build` on tag push.
-- `.deb` via `cargo-deb`.
+- Flatpak build via `flatpak-builder --ci-build` on tag push (produces the single `org.gnome.PowerToys` bundle).
+- `.deb` via `dpkg-buildpackage` on tag push (produces every binary package from the `gnome-power-toys` source package).
 - UI smoke: headless `gtk-run` scenario opens a workspace, creates a tab, saves a layout, exits; non-zero exit on panic.
 
 ### 12.4 Versioning
 
-SemVer. Internal crate versions independent; binary release is one `gnome-deck` version. Schema migrations (§3.7) versioned separately; code pins `LATEST_SCHEMA_VERSION`, upgrades unidirectional.
+SemVer. Internal crate versions independent; the monorepo ships one release version that tags every binary package (`gnome-clips`, `gnome-zones`, `gnome-deck`, …). Schema migrations (§3.7) are versioned separately from the release version; code pins `LATEST_SCHEMA_VERSION`, upgrades unidirectional.
 
 ---
 
