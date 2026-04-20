@@ -57,7 +57,10 @@ pub fn payload_for<'a>(content_type: &'a str, data: &'a [u8]) -> ClipboardPayloa
 /// IO side: apply a payload to the given clipboard.
 pub fn apply(clipboard: &gdk::Clipboard, payload: ClipboardPayload<'_>) {
     match payload {
-        ClipboardPayload::Text(s) => clipboard.set_text(&s),
+        ClipboardPayload::Text(s) => {
+            tracing::info!(bytes = s.len(), "clipboard: setting text");
+            clipboard.set_text(&s);
+        }
         ClipboardPayload::Texture(bytes) => {
             let gbytes = glib::Bytes::from(bytes);
             match gdk::Texture::from_bytes(&gbytes) {

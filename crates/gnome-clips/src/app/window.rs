@@ -181,11 +181,18 @@ impl ClipsWindow {
             let window = window.clone();
             let proxy = proxy.clone();
             Rc::new(move |id: i64| {
+                tracing::info!(clip_id = id, "paste triggered");
                 let window = window.clone();
                 let proxy = proxy.clone();
                 glib::MainContext::default().spawn_local(async move {
                     match proxy.get_clip(id).await {
                         Ok(detail) => {
+                            tracing::info!(
+                                clip_id = id,
+                                mime = %detail.content_type,
+                                bytes = detail.content.len(),
+                                "paste fetched clip"
+                            );
                             if let Some(display) = gdk::Display::default() {
                                 let payload = payload_for(&detail.content_type, &detail.content);
                                 apply_clipboard(&display.clipboard(), payload);
