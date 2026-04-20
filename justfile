@@ -59,9 +59,19 @@ build-all:
     BUILD_EXTRA=-d ./scripts/build-packages.sh --all
 
 # Build the .deb suite and install it locally via apt (uses sudo).
+#
+# Stages the freshly built .debs in /tmp before calling apt: dpkg-buildpackage
+# drops artifacts in the parent dir (i.e. under $HOME), and on modern Ubuntu
+# $HOME is mode 750, so the unprivileged `_apt` download user cannot read
+# them. Staging outside $HOME avoids the apt sandbox fallback entirely.
 install-deb: build-deb
-    sudo apt install -y --reinstall \
-        ../gnome-clips_*.deb \
-        ../gnome-zones_*.deb \
-        ../gnome-power-toys-extensions_*.deb \
-        ../gnome-power-toys_*.deb
+    #!/usr/bin/env bash
+    set -euo pipefail
+    stage=$(mktemp -d --tmpdir=/tmp gnome-power-toys-debs.XXXXXX)
+    trap 'rm -rf "$stage"' EXIT
+    chmod 755 "$stage"
+    cp ../gnome-clips_*.deb \
+       ../gnome-zones_*.deb \
+       ../gnome-power-toys-extensions_*.deb \
+       ../gnome-power-toys_*.deb "$stage/"
+    sudo apt install -y --reinstall "$stage"/*.deb
