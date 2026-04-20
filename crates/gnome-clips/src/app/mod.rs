@@ -4,7 +4,6 @@ pub mod filter_bar;
 pub mod preview_pane;
 pub mod window;
 
-use gtk4::gio::ApplicationFlags;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
@@ -15,6 +14,5 @@ pub const APP_ID: &str = "org.gnome.Clips.Ui";
 pub fn build_app() -> adw::Application {
     adw::Application::builder()
         .application_id(APP_ID)
-        .flags(ApplicationFlags::HANDLES_COMMAND_LINE)
         .build()
 }
