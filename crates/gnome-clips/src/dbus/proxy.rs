@@ -55,6 +55,7 @@ pub trait Clips {
     async fn add_exclusion(&self, app_id: &str) -> zbus::Result<()>;
     async fn remove_exclusion(&self, app_id: &str) -> zbus::Result<()>;
     async fn set_incognito(&self, enabled: bool) -> zbus::Result<()>;
+    async fn paste(&self, id: i64) -> zbus::Result<()>;
 
     #[zbus(property)]
     fn is_incognito(&self) -> zbus::Result<bool>;

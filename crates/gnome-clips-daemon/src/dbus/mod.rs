@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 use zbus::ConnectionBuilder;
 
+use crate::clipboard::writer::ClipboardWriter;
 use crate::db::Database;
 use crate::error::Result;
 use interface::ClipsInterface;
@@ -20,12 +21,14 @@ pub async fn run_service(
     db: Arc<Mutex<Database>>,
     incognito_rx: watch::Receiver<bool>,
     incognito_tx: watch::Sender<bool>,
+    writer: Arc<ClipboardWriter>,
     mut events: mpsc::Receiver<DaemonEvent>,
 ) -> Result<()> {
     let iface = ClipsInterface {
         db: db.clone(),
         incognito: incognito_rx,
         incognito_tx,
+        writer,
     };
 
     let conn = ConnectionBuilder::session()?

@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 use zbus::interface;
 
+use crate::clipboard::writer::ClipboardWriter;
 use crate::db::{
     clips::{delete_clip, get_clip, get_history, set_pinned},
     exclusions::{add_exclusion, remove_exclusion},
@@ -17,6 +18,8 @@ pub struct ClipsInterface {
     pub incognito: watch::Receiver<bool>,
     /// Broadcasts incognito state changes to all subscribers.
     pub incognito_tx: watch::Sender<bool>,
+    /// Writes stored clips back to the system clipboard.
+    pub writer: Arc<ClipboardWriter>,
 }
 
 fn map_err(e: impl std::fmt::Display) -> zbus::fdo::Error {
@@ -118,6 +121,22 @@ impl ClipsInterface {
         Ok(())
     }
 
+    /// Reads the stored clip and writes its bytes to the system clipboard
+    /// so the next Ctrl+V in any app produces them.
+    async fn paste(&self, id: i64) -> zbus::fdo::Result<()> {
+        let clip = {
+            let db = self.db.lock().unwrap();
+            get_clip(&db, id)
+                .map_err(map_err)?
+                .ok_or_else(|| zbus::fdo::Error::Failed(format!("clip {id} not found")))?
+        };
+        self.writer
+            .write(&clip.content, &clip.content_type)
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
     #[zbus(signal)]
     pub async fn clip_added(ctx: &zbus::SignalContext<'_>, clip: ClipSummary) -> zbus::Result<()>;
 
@@ -144,10 +163,16 @@ mod tests {
         let db = Database::open(f.path()).unwrap();
         insert_clip(&db, b"hello", "text/plain", Some("hello"), Some("gedit")).unwrap();
         let (tx, rx) = watch::channel(false);
+        let last_hash = Arc::new(tokio::sync::Mutex::new(None));
+        let writer = Arc::new(ClipboardWriter::new(
+            crate::clipboard::Backend::Noop,
+            last_hash,
+        ));
         ClipsInterface {
             db: Arc::new(Mutex::new(db)),
             incognito: rx,
             incognito_tx: tx,
+            writer,
         }
     }
 

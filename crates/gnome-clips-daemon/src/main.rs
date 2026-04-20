@@ -12,6 +12,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::info;
 
+use crate::clipboard::writer::ClipboardWriter;
 use crate::config::Config;
 use crate::db::{exclusions::seed_defaults, Database};
 use crate::dbus::DaemonEvent;
@@ -37,7 +38,16 @@ async fn main() -> error::Result<()> {
     let (event_tx, event_rx) = mpsc::channel::<DaemonEvent>(64);
 
     let (clip_tx, mut clip_rx) = mpsc::channel::<clipboard::ClipboardEvent>(64);
-    clipboard::start_monitor(clip_tx).await;
+    let last_hash = Arc::new(tokio::sync::Mutex::new(None));
+    let backend = match clipboard::Backend::detect() {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "falling back to no-op clipboard backend");
+            clipboard::Backend::Noop
+        }
+    };
+    let writer = Arc::new(ClipboardWriter::new(backend.clone(), last_hash.clone()));
+    clipboard::start_monitor(backend, last_hash, clip_tx).await;
 
     {
         let db = db.clone();
@@ -119,7 +129,7 @@ async fn main() -> error::Result<()> {
         });
     }
 
-    dbus::run_service(db, incognito_rx, incognito_tx, event_rx).await?;
+    dbus::run_service(db, incognito_rx, incognito_tx, writer, event_rx).await?;
 
     Ok(())
 }

@@ -1,7 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{ApplicationWindow, Box as GBox, EventControllerKey, Orientation, Paned, Separator};
@@ -11,7 +10,6 @@ use crate::app::clip_list::ClipList;
 use crate::app::filter_bar::FilterBar;
 use crate::app::preview_pane::PreviewPane;
 use crate::dbus::ClipsProxy;
-use crate::paste::{apply as apply_clipboard, payload_for};
 
 pub struct ClipsWindow {
     pub window: ApplicationWindow,
@@ -66,8 +64,10 @@ impl ClipsWindow {
                 let filter = filter_bar.active_filter().to_string();
                 let search = filter_bar.search.text().to_string();
                 glib::MainContext::default().spawn_local(async move {
+                    tracing::info!(%filter, %search, "refresh fetch");
                     match proxy_fetch.get_history(&filter, &search, 0, 200).await {
                         Ok(result) => {
+                            tracing::info!(count = result.len(), "refresh got clips");
                             let proxy_del = proxy_del.clone();
                             clip_list.populate(&result, move |id| {
                                 let proxy = proxy_del.clone();
@@ -172,35 +172,19 @@ impl ClipsWindow {
             });
         }
 
-        // One paste closure, shared by the paste button, row-activation
-        // (double-click / Enter on a focused row) and the Enter key on
-        // the window. Fetches the full clip from the daemon, writes the
-        // bytes to the system clipboard under the right MIME, and hides
-        // the window so the user can Ctrl+V into the target app.
+        // Paste is delegated to the daemon's `Paste` method. The daemon
+        // owns the system-clipboard selection for the whole session, so
+        // ownership outlives the popup hide (which was the reason writing
+        // from the UI failed for real paste clients).
         let paste: Rc<dyn Fn(i64) + 'static> = {
             let window = window.clone();
             let proxy = proxy.clone();
             Rc::new(move |id: i64| {
-                tracing::info!(clip_id = id, "paste triggered");
                 let window = window.clone();
                 let proxy = proxy.clone();
                 glib::MainContext::default().spawn_local(async move {
-                    match proxy.get_clip(id).await {
-                        Ok(detail) => {
-                            tracing::info!(
-                                clip_id = id,
-                                mime = %detail.content_type,
-                                bytes = detail.content.len(),
-                                "paste fetched clip"
-                            );
-                            if let Some(display) = gdk::Display::default() {
-                                let payload = payload_for(&detail.content_type, &detail.content);
-                                apply_clipboard(&display.clipboard(), payload);
-                            } else {
-                                tracing::warn!("no default gdk::Display — cannot paste");
-                            }
-                        }
-                        Err(e) => tracing::warn!(error = %e, "get_clip failed during paste"),
+                    if let Err(e) = proxy.paste(id).await {
+                        tracing::warn!(error = %e, clip_id = id, "daemon paste failed");
                     }
                     window.set_visible(false);
                 });

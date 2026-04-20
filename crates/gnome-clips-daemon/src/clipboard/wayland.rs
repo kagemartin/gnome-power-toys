@@ -2,8 +2,10 @@
 //! Detects changes by hashing content.
 
 use std::io::Read;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+
+use tokio::sync::{mpsc, Mutex};
 use wl_clipboard_rs::paste::{get_contents, get_mime_types, ClipboardType, Error, MimeType, Seat};
 
 use super::{content_hash, ClipboardEvent, ContentHash};
@@ -20,16 +22,19 @@ const MIME_PRIORITY: &[&str] = &[
     "text/plain",
 ];
 
-pub async fn poll_wayland(tx: mpsc::Sender<ClipboardEvent>) {
-    let mut last_hash: Option<ContentHash> = None;
-
+pub async fn poll_wayland(
+    last_hash: Arc<Mutex<Option<ContentHash>>>,
+    tx: mpsc::Sender<ClipboardEvent>,
+) {
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
 
         if let Some(event) = read_clipboard() {
             let hash = content_hash(&event.content);
-            if Some(hash) != last_hash {
-                last_hash = Some(hash);
+            let mut lh = last_hash.lock().await;
+            if Some(hash) != *lh {
+                *lh = Some(hash);
+                drop(lh);
                 let _ = tx.send(event).await;
             }
         }
@@ -46,12 +51,7 @@ fn read_clipboard() -> Option<ClipboardEvent> {
         .iter()
         .find(|&&m| types.contains(m))
         .map(|m| m.to_string())
-        .or_else(|| {
-            types
-                .iter()
-                .find(|t| t.starts_with("text/"))
-                .cloned()
-        })?;
+        .or_else(|| types.iter().find(|t| t.starts_with("text/")).cloned())?;
 
     let result = get_contents(
         ClipboardType::Regular,

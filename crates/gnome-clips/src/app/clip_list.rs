@@ -48,6 +48,14 @@ impl ClipList {
         for clip in sort_clips(clips) {
             self.append_clip(clip, on_delete.clone());
         }
+
+        let mut n = 0;
+        let mut c = self.list_box.first_child();
+        while let Some(ch) = c {
+            n += 1;
+            c = ch.next_sibling();
+        }
+        tracing::info!(rows = n, "clip_list populated");
     }
 
     fn append_clip<F>(&self, clip: &ClipSummary, on_delete: F)
