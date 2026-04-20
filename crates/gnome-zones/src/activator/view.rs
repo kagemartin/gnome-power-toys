@@ -16,7 +16,10 @@ pub fn show(
     monitor_key: String,
     paused: bool,
 ) {
-    let display = gdk::Display::default().expect("no display");
+    let Some(display) = gdk::Display::default() else {
+        tracing::warn!("activator: no default display; cannot show overlay");
+        return;
+    };
     let monitor = monitor_for_key(&display, &monitor_key);
 
     let window = build_overlay(app, &monitor, KeyMode::OnDemand);
@@ -36,7 +39,7 @@ pub fn show(
                 return;
             }
         };
-        let Some(_app) = app_weak.upgrade() else { return; };
+        if app_weak.upgrade().is_none() { return; }
         let Some(window) = window_weak.upgrade() else { return; };
 
         let monitor_geo = monitor.geometry();
@@ -101,10 +104,14 @@ pub fn show(
         });
         window.add_controller(key_ctrl);
 
-        let window_timeout = window.clone();
+        let window_timeout = window.downgrade();
         gtk4::glib::timeout_add_local_once(
             std::time::Duration::from_millis(ACTIVATOR_TIMEOUT_MS),
-            move || { window_timeout.close(); },
+            move || {
+                if let Some(w) = window_timeout.upgrade() {
+                    w.close();
+                }
+            },
         );
 
         window.present();
