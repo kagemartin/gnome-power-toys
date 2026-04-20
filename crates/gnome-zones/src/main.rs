@@ -4,6 +4,7 @@ mod dbus;
 mod editor;
 mod error;
 mod overlay;
+mod panel;
 
 use clap::Parser;
 use gtk4::prelude::*;

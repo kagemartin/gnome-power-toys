@@ -20,3 +20,5 @@ tracing            = "0.1"
 tracing-subscriber = { version = "0.3",  features = ["env-filter"] }
 thiserror          = "1"
 clap               = { version = "4",    features = ["derive"] }
+ksni               = "0.3"
+async-channel      = "2"

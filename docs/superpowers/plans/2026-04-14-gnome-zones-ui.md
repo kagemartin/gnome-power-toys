@@ -4,11 +4,11 @@
 
 **Goal:** Build `gnome-zones`, the GTK4/libadwaita UI process — a full-screen zone editor overlay, a transient activator overlay, and a panel status icon — all driven by D-Bus signals from the running `gnome-zones-daemon`.
 
-**Architecture:** A single GTK4 binary (`gnome-zones`) that (1) owns the panel `AppIndicator3` icon, (2) subscribes to the `org.gnome.Zones` D-Bus service for `ActivatorRequested` and `EditorRequested` signals, and (3) spawns the appropriate overlay window on signal receipt. Overlays are transparent layer-shell windows (Wayland) or `_NET_WM_WINDOW_TYPE_DOCK` windows (X11) that cover one monitor. All persistent state lives in the daemon; the UI fetches layouts / monitors / settings on demand and issues mutating D-Bus calls back.
+**Architecture:** A single GTK4 binary (`gnome-zones`) that (1) owns a panel status-icon (StatusNotifierItem, via the pure-Rust `ksni` crate — see Task 17 for the rewrite from the original `libayatana-appindicator` design), (2) subscribes to the `org.gnome.Zones` D-Bus service for `ActivatorRequested` and `EditorRequested` signals, and (3) spawns the appropriate overlay window on signal receipt. Overlays are transparent layer-shell windows (Wayland) or `_NET_WM_WINDOW_TYPE_DOCK` windows (X11) that cover one monitor. All persistent state lives in the daemon; the UI fetches layouts / monitors / settings on demand and issues mutating D-Bus calls back.
 
 The editor's *pure logic* (split/delete/renumber/merge) lives in a standalone `editor::state` module that is fully unit-testable. GTK code in `editor::view` only renders that state and translates pointer events into state mutations. Same separation for the activator.
 
-**Tech Stack:** Rust 2021, `gtk4` + `libadwaita` (gtk4-rs), `gtk4-layer-shell` (Wayland overlays), `zbus` 4 with tokio feature (D-Bus client), `tokio` 1, `libayatana-appindicator` 0.9 (panel icon), `futures-util` for signal streams.
+**Tech Stack:** Rust 2021, `gtk4` + `libadwaita` (gtk4-rs), `gtk4-layer-shell` (Wayland overlays), `zbus` 4 with tokio feature (D-Bus client), `tokio` 1, `ksni` 0.3 + `async-channel` 2 (panel StatusNotifierItem icon; see Task 17 for the GTK4-compatibility rewrite away from `libayatana-appindicator`), `futures-util` for signal streams.
 
 **Spec:** `docs/superpowers/specs/2026-04-14-gnome-zones-design.md`
 
@@ -42,10 +42,10 @@ crates/gnome-zones/
     │   └── view.rs               # GTK widget: render + drag + toolbar
     └── panel/
         ├── mod.rs                # re-exports
-        └── indicator.rs          # AppIndicator3 tray icon + right-click menu
+        └── indicator.rs          # ksni StatusNotifierItem tray + menu (no GTK deps)
 ```
 
-Each file has one responsibility. `state.rs` modules are pure Rust (no GTK); `view.rs` modules and `indicator.rs` contain all GTK / AppIndicator code.
+Each file has one responsibility. `state.rs` modules are pure Rust (no GTK); `view.rs` modules contain all GTK code. `panel/indicator.rs` is pure-Rust too (`ksni` + `async-channel`) — it owns no GTK widgets; tray events flow back to the GTK main context via an `async_channel::Receiver<TrayEvent>` that Task 18's dispatcher drains.
 
 ---
 
@@ -94,11 +94,11 @@ tracing            = "0.1"
 tracing-subscriber = { version = "0.3",  features = ["env-filter"] }
 thiserror          = "1"
 clap               = { version = "4",    features = ["derive"] }
-
-[dependencies.libayatana-appindicator]
-version = "0.9"
-features = []
+ksni               = "0.3"
+async-channel      = "2"
 ```
+
+(The original plan listed `libayatana-appindicator = "0.9"` here; see Task 17 for the rewrite that replaced it with `ksni` + `async-channel`.)
 
 - [ ] **Step 3: Create stub `crates/gnome-zones/src/main.rs`**
 
@@ -117,8 +117,11 @@ cargo build -p gnome-zones
 Expected: success. Install deps if missing:
 
 ```bash
-sudo apt install libgtk-4-dev libadwaita-1-dev libgtk-layer-shell-dev libayatana-appindicator3-dev
+sudo apt install libgtk-4-dev libadwaita-1-dev libgtk-layer-shell-dev
 ```
+
+(`ksni` is pure-Rust and speaks the StatusNotifierItem protocol over the
+session bus via zbus; it needs no system library.)
 
 - [ ] **Step 5: Commit**
 
@@ -2380,179 +2383,133 @@ git commit -m "feat(zones-ui): editor public show entry point"
 
 ---
 
-## Task 17: Panel status icon
+## Task 17: Panel status icon (revised — `ksni` replaces `libayatana-appindicator`)
+
+**Rewrite note:** the original plan used `libayatana-appindicator` 0.9, which
+is a thin binding over `libayatana-appindicator3` and drags in GTK3 for its
+menu widgets. gnome-zones' UI is GTK4; mixing GTK3 and GTK4 in one process is
+unsupported. We replaced the dependency with the pure-Rust
+[`ksni`](https://crates.io/crates/ksni) crate, which implements the KDE /
+freedesktop StatusNotifierItem (SNI) protocol directly on `zbus`. SNI is what
+AppIndicator itself speaks over the wire, so the visible behaviour (icon +
+dbusmenu popup in GNOME with the AppIndicator shell extension, KDE, XFCE,
+etc.) is identical; ksni just skips the GTK wrapper.
 
 **Files:**
 - Create: `crates/gnome-zones/src/panel/mod.rs`
 - Create: `crates/gnome-zones/src/panel/indicator.rs`
-- Modify: `crates/gnome-zones/src/main.rs`
+- Modify: `crates/gnome-zones/Cargo.toml` — add `ksni = "0.3"` and `async-channel = "2"`.
+- Modify: `crates/gnome-zones/src/main.rs` — `mod panel;`.
 
-Panel icon via `libayatana-appindicator`. Left-click triggers `ShowActivator` (daemon emits signal; UI catches it). Right-click menu contains layout switching, Edit zones…, Pause/Resume, About.
+**Architecture.** `ksni` runs on tokio. Menu activations fire on tokio
+workers, so tray click handlers cannot directly touch GTK widgets (which are
+single-threaded and bound to the GTK main context). We bridge the two with
+an `async_channel::Receiver<TrayEvent>`:
 
-- [ ] **Step 1: Create `src/panel/indicator.rs`**
+1. `panel::Indicator::spawn(rt, layouts, paused)` builds a `PanelTray`
+   implementing `ksni::Tray`, drives `TrayMethods::spawn` on the provided
+   `tokio::runtime::Handle`, and returns `(Indicator, Receiver<TrayEvent>)`.
+2. Each `StandardItem` / `CheckmarkItem` activation closure (which ksni
+   types as `Box<dyn Fn(&mut PanelTray) + Send>`) clones the internal
+   `Sender<TrayEvent>` and fires `tx.try_send(event)`.
+3. Group G (Task 18) drains the receiver with
+   `glib::MainContext::spawn_local(async move { while let Ok(ev) = rx.recv().await { dispatch(ev) } })`,
+   dispatching each event back onto the GTK main loop.
+4. Daemon signals (`PausedChanged`, `LayoutsChanged`) call
+   `indicator.set_paused(...)` / `indicator.set_layouts(...)`, which in
+   turn call `ksni::Handle::update` on the stored tokio handle.
+
+**`TrayEvent` variants:**
 
 ```rust
-use crate::dbus::{LayoutSummaryWire, ZonesProxy};
-use gtk4::prelude::*;
-use libayatana_appindicator::{AppIndicator, AppIndicatorStatus};
-use std::cell::RefCell;
-use std::rc::Rc;
-
-pub struct Indicator {
-    inner: RefCell<AppIndicator>,
-    menu: gtk4::Menu,
+pub enum TrayEvent {
+    ShowActivator,        // left-click on icon, or "Show activator" item
+    ShowEditor,           // "Edit zones…" item
+    AssignLayout(i64),    // Layout submenu → assign to primary monitor
+    TogglePaused,         // "Pause" checkmark
 }
+```
 
+**`Indicator` API:**
+
+```rust
 impl Indicator {
-    pub fn new(
-        proxy: ZonesProxy<'static>,
-        layouts: Vec<LayoutSummaryWire>,
+    pub fn spawn(
+        rt: tokio::runtime::Handle,
+        layouts: Vec<crate::dbus::LayoutSummaryWire>,
         paused: bool,
-    ) -> Rc<Self> {
-        let mut ind = AppIndicator::new("gnome-zones", "");
-        ind.set_status(AppIndicatorStatus::Active);
-        ind.set_icon_full(if paused { "view-grid-symbolic" } else { "view-grid-symbolic" }, "gnome-zones");
+    ) -> Result<(Self, async_channel::Receiver<TrayEvent>), ksni::Error>;
 
-        let menu = gtk4::Menu::new();
-
-        // Left-click — but appindicator only supports right-click menu; for left-click
-        // we use "secondary-activate-target" set to a specific item, or just treat
-        // left-click as opening the activator via a dedicated item.
-        let activator_item = gtk4::MenuItem::with_label("Show activator");
-        {
-            let proxy = proxy.clone();
-            activator_item.connect_activate(move |_| {
-                let proxy = proxy.clone();
-                gtk4::glib::MainContext::default().spawn_local(async move {
-                    let _ = proxy.show_activator().await;
-                });
-            });
-        }
-        menu.append(&activator_item);
-
-        let edit_item = gtk4::MenuItem::with_label("Edit zones…");
-        {
-            // Fire EditorRequested by calling a method — we don't have one; instead
-            // we emit a local in-process trigger via glib action. Simpler: hit the
-            // same D-Bus path as the Super+Shift+E hotkey by having the daemon expose
-            // a method. For now, use the direct editor::show() call from main.rs via
-            // a channel. Implemented in Task 18.
-            edit_item.set_sensitive(true);
-        }
-        menu.append(&edit_item);
-
-        menu.append(&gtk4::SeparatorMenuItem::new());
-
-        // Layout submenu
-        let layout_item = gtk4::MenuItem::with_label("Layout");
-        let layout_sub = gtk4::Menu::new();
-        for l in &layouts {
-            let mi = gtk4::MenuItem::with_label(&l.name);
-            let proxy = proxy.clone();
-            let id = l.id;
-            mi.connect_activate(move |_| {
-                let proxy = proxy.clone();
-                gtk4::glib::MainContext::default().spawn_local(async move {
-                    // Resolve primary monitor key on the fly
-                    if let Ok(monitors) = proxy.list_monitors().await {
-                        let key = monitors
-                            .iter()
-                            .find(|m| m.is_primary)
-                            .map(|m| m.monitor_key.clone())
-                            .or_else(|| monitors.first().map(|m| m.monitor_key.clone()))
-                            .unwrap_or_default();
-                        if !key.is_empty() {
-                            let _ = proxy.assign_layout(&key, id).await;
-                        }
-                    }
-                });
-            });
-            layout_sub.append(&mi);
-        }
-        layout_item.set_submenu(Some(&layout_sub));
-        menu.append(&layout_item);
-
-        menu.append(&gtk4::SeparatorMenuItem::new());
-
-        let pause_item = gtk4::CheckMenuItem::with_label("Pause");
-        pause_item.set_active(paused);
-        {
-            let proxy = proxy.clone();
-            pause_item.connect_toggled(move |_| {
-                let proxy = proxy.clone();
-                gtk4::glib::MainContext::default().spawn_local(async move {
-                    let _ = proxy.toggle_paused().await;
-                });
-            });
-        }
-        menu.append(&pause_item);
-
-        let about = gtk4::MenuItem::with_label("About gnome-zones");
-        menu.append(&about);
-
-        menu.show_all();
-        ind.set_menu(&mut menu.clone());
-
-        Rc::new(Self { inner: RefCell::new(ind), menu })
-    }
-
-    /// Set the indicator icon to paused/unpaused.
-    pub fn set_paused(&self, paused: bool) {
-        let mut ind = self.inner.borrow_mut();
-        ind.set_icon_full(
-            if paused { "view-grid-symbolic" } else { "view-grid-symbolic" },
-            "gnome-zones",
-        );
-        // (Future: ship a strikethrough variant icon in dist/icons/)
-        let _ = paused;
-    }
-
-    /// Hand off the Edit-zones… menu item's activation to the caller.
-    pub fn connect_edit_clicked<F: Fn() + 'static>(&self, cb: F) {
-        // Find the "Edit zones…" menu item (second child).
-        let children = self.menu.children();
-        if let Some(item) = children.get(1).and_then(|c| c.downcast_ref::<gtk4::MenuItem>()) {
-            item.connect_activate(move |_| cb());
-        }
-    }
+    pub fn set_paused(&self, paused: bool);
+    pub fn set_layouts(&self, layouts: Vec<crate::dbus::LayoutSummaryWire>);
+    pub fn shutdown(&self);
 }
 ```
 
-Note: `libayatana-appindicator` builds on top of GTK3 menus, not GTK4. If the 0.9 crate still exposes a GTK3 menu API, use that — the imports above may need to be `gtk3::Menu` instead of `gtk4::Menu`. Verify the crate's current API and adjust.
+The `Indicator` stores the `ksni::Handle<PanelTray>` plus the tokio
+`runtime::Handle`, and calls `handle.shutdown()` on `Drop`.
 
-- [ ] **Step 2: Create `src/panel/mod.rs`**
+**Menu structure:**
 
-```rust
-pub mod indicator;
+1. `Show activator` → `TrayEvent::ShowActivator`
+2. `Edit zones…` → `TrayEvent::ShowEditor`
+3. Separator
+4. `Layout ▶` submenu: one `StandardItem` per layout, fires
+   `TrayEvent::AssignLayout(id)`. If the layout list is empty, the submenu
+   is disabled and contains a single "(no layouts)" placeholder.
+5. Separator
+6. `Pause` `CheckmarkItem` reflecting `self.paused`, fires
+   `TrayEvent::TogglePaused` (the daemon's paused flag remains the source
+   of truth — `set_paused` is called when `PausedChanged` arrives).
+7. Separator
+8. `About gnome-zones` — placeholder that logs via `tracing::info!`.
 
-pub use indicator::Indicator;
-```
+Icon is the Adwaita symbolic `view-grid-symbolic`.
 
-- [ ] **Step 3: Wire module into `main.rs`**
+**ksni API quirks worth noting for Group G:**
 
-```rust
-mod activator;
-mod app;
-mod dbus;
-mod editor;
-mod error;
-mod overlay;
-mod panel;
-```
+- `ksni::Tray` is `Sized + Send + 'static`. Required method: `id()`.
+  Provided methods include `title`, `icon_name`, `tool_tip`, `menu`,
+  `activate(&mut self, x, y)`.
+- Menu item `activate` closures are `Box<dyn Fn(&mut T) + Send>` (`Fn`, not
+  `FnMut`) — so they can capture `Sender` by clone and call `try_send`
+  without any interior-mutability dance.
+- `TrayMethods::spawn(self) -> Result<Handle<T>, Error>` is **async**; call
+  it with `rt.block_on(...)` from the synchronous spawn entry point, or
+  `.await` it if you're already in an async context.
+- `Handle::update(|tray| ...)` is also async. `set_paused` / `set_layouts`
+  are synchronous (called from the GTK main thread); they fire-and-forget
+  with `rt.spawn(async move { handle.update(...).await; })`.
 
-- [ ] **Step 4: Verify compile**
+**Steps:**
+
+- [ ] **Step 1: Cargo.toml** — add `ksni = "0.3"` and `async-channel = "2"`.
+      `ksni` transitively depends on `zbus 5`; our crate uses `zbus 4`. Both
+      semver-major versions coexist in the dep graph (Cargo resolves them
+      independently). Run `cargo check -p gnome-zones` to confirm.
+
+- [ ] **Step 2: Create `src/panel/indicator.rs`** implementing `PanelTray`
+      (`ksni::Tray`), the `TrayEvent` enum, and the `Indicator` handle with
+      `spawn`/`set_paused`/`set_layouts`/`shutdown`. The module must contain
+      no GTK imports — only `ksni`, `async_channel`, `tokio::runtime::Handle`,
+      and `crate::dbus::LayoutSummaryWire`.
+
+- [ ] **Step 3: Create `src/panel/mod.rs`** exporting `Indicator` and
+      `TrayEvent`.
+
+- [ ] **Step 4: Wire `mod panel;` into `main.rs`** (alphabetical, after
+      `mod overlay;`).
+
+- [ ] **Step 5: Verify compile** — `cargo build -p gnome-zones`. Expect
+      success; `Indicator`/`TrayEvent` will warn as never-used until Group G
+      consumes them.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-cargo build -p gnome-zones
-```
-
-Expected: success (address any GTK3/GTK4 mismatch errors by matching the libayatana-appindicator crate's menu type).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/gnome-zones/src/
-git commit -m "feat(zones-ui): panel AppIndicator + right-click menu"
+git add crates/gnome-zones/Cargo.toml crates/gnome-zones/src/panel/ \
+        crates/gnome-zones/src/main.rs Cargo.lock
+git commit -m "feat(zones-ui): panel tray via ksni (StatusNotifierItem; replaces libayatana-appindicator)"
 ```
 
 ---
@@ -2809,7 +2766,7 @@ Start the UI: `./target/debug/gnome-zones &`
 - [ ] Editing a preset and hitting Apply auto-forks (preset itself never changes)
 
 ## Panel icon
-- [ ] Appindicator icon visible in the system tray on launch
+- [ ] StatusNotifierItem tray icon (via `ksni`) visible in the system tray on launch (requires the GNOME AppIndicator extension, or any SNI-aware panel on KDE/XFCE/etc.)
 - [ ] Right-click menu lists all layouts; selecting one assigns it to the primary monitor
 - [ ] "Pause" toggle pauses/resumes snap hotkeys (confirmed via `Super+Ctrl+1`)
 - [ ] "Edit zones…" opens the editor on the primary monitor
