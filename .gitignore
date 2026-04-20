@@ -24,3 +24,20 @@ target
 .claire/
 .claude/
 .act/
+
+# Packaging outputs
+/build-dir/
+/flatpak-repo/
+/debian/.debhelper/
+/debian/cargo-home/
+/debian/files
+/debian/*.substvars
+/debian/gnome-clips/
+/debian/gnome-zones/
+/debian/gnome-power-toys/
+/debian/gnome-power-toys-extensions/
+/debian/debhelper-build-stamp
+*.deb
+*.ddeb
+*.changes
+*.buildinfo
