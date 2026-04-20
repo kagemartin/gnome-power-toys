@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "crates/gnome-clips-daemon",
+]
+resolver = "2"
