@@ -1,3 +1,9 @@
+gnome-power-toys (0.3.1-1) unstable; urgency=medium
+
+  * Release 0.3.1.
+
+ -- Kage  Martin <kagemartin@ganymede>  Mon, 20 Apr 2026 14:02:12 -0700
+
 gnome-power-toys (0.1.0-1) unstable; urgency=low
 
   * Initial release. Includes gnome-clips and gnome-zones.
