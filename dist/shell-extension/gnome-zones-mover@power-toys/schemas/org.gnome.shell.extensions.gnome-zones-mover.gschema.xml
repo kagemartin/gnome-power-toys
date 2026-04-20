@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.gnome-zones-mover"
+          path="/org/gnome/shell/extensions/gnome-zones-mover/">
+
+    <key name="snap-1" type="as"><default><![CDATA[['<Super><Control>1']]]></default><summary>Snap focused window to zone 1</summary><description/></key>
+    <key name="snap-2" type="as"><default><![CDATA[['<Super><Control>2']]]></default><summary>Snap focused window to zone 2</summary><description/></key>
+    <key name="snap-3" type="as"><default><![CDATA[['<Super><Control>3']]]></default><summary>Snap focused window to zone 3</summary><description/></key>
+    <key name="snap-4" type="as"><default><![CDATA[['<Super><Control>4']]]></default><summary>Snap focused window to zone 4</summary><description/></key>
+    <key name="snap-5" type="as"><default><![CDATA[['<Super><Control>5']]]></default><summary>Snap focused window to zone 5</summary><description/></key>
+    <key name="snap-6" type="as"><default><![CDATA[['<Super><Control>6']]]></default><summary>Snap focused window to zone 6</summary><description/></key>
+    <key name="snap-7" type="as"><default><![CDATA[['<Super><Control>7']]]></default><summary>Snap focused window to zone 7</summary><description/></key>
+    <key name="snap-8" type="as"><default><![CDATA[['<Super><Control>8']]]></default><summary>Snap focused window to zone 8</summary><description/></key>
+    <key name="snap-9" type="as"><default><![CDATA[['<Super><Control>9']]]></default><summary>Snap focused window to zone 9</summary><description/></key>
+
+    <key name="span-1" type="as"><default><![CDATA[['<Super><Alt>1']]]></default><summary>Span focused window into zone 1</summary><description/></key>
+    <key name="span-2" type="as"><default><![CDATA[['<Super><Alt>2']]]></default><summary>Span focused window into zone 2</summary><description/></key>
+    <key name="span-3" type="as"><default><![CDATA[['<Super><Alt>3']]]></default><summary>Span focused window into zone 3</summary><description/></key>
+    <key name="span-4" type="as"><default><![CDATA[['<Super><Alt>4']]]></default><summary>Span focused window into zone 4</summary><description/></key>
+    <key name="span-5" type="as"><default><![CDATA[['<Super><Alt>5']]]></default><summary>Span focused window into zone 5</summary><description/></key>
+    <key name="span-6" type="as"><default><![CDATA[['<Super><Alt>6']]]></default><summary>Span focused window into zone 6</summary><description/></key>
+    <key name="span-7" type="as"><default><![CDATA[['<Super><Alt>7']]]></default><summary>Span focused window into zone 7</summary><description/></key>
+    <key name="span-8" type="as"><default><![CDATA[['<Super><Alt>8']]]></default><summary>Span focused window into zone 8</summary><description/></key>
+    <key name="span-9" type="as"><default><![CDATA[['<Super><Alt>9']]]></default><summary>Span focused window into zone 9</summary><description/></key>
+
+    <key name="activator" type="as"><default><![CDATA[['<Super>grave']]]></default><summary>Show zone activator</summary><description/></key>
+    <key name="iter-prev" type="as"><default><![CDATA[['<Super>Left']]]></default><summary>Iterate to previous zone</summary><description/></key>
+    <key name="iter-next" type="as"><default><![CDATA[['<Super>Right']]]></default><summary>Iterate to next zone</summary><description/></key>
+    <key name="cycle-prev" type="as"><default><![CDATA[['<Super>Page_Up']]]></default><summary>Cycle focus back in zone</summary><description/></key>
+    <key name="cycle-next" type="as"><default><![CDATA[['<Super>Page_Down']]]></default><summary>Cycle focus forward in zone</summary><description/></key>
+    <key name="editor" type="as"><default><![CDATA[['<Super><Shift>e']]]></default><summary>Open zone editor</summary><description/></key>
+    <key name="pause" type="as"><default><![CDATA[['<Super><Shift>p']]]></default><summary>Toggle pause</summary><description/></key>
+
+  </schema>
+</schemalist>
