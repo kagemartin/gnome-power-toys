@@ -48,6 +48,14 @@ fn conflict_entries() -> Vec<(&'static str, String, String)> {
         "switch-group-backward".to_string(),
         "gnome_default_switch_group_backward".to_string(),
     ));
+    // Super+Down — we bind the extension's `restore` hotkey to this so
+    // unsnap goes through our logic (restore pre-snap rect, or fall back
+    // to native unmaximize via the shim). Stash mutter's value first.
+    v.push((
+        WM_KB_SCHEMA,
+        "unmaximize".to_string(),
+        "gnome_default_wm_unmaximize".to_string(),
+    ));
     v
 }
 
@@ -95,34 +103,24 @@ pub fn stash_gnome_defaults(db: &Database) -> Result<()> {
     Ok(())
 }
 
-/// Stash the current values of `wm.keybindings.maximize` / `unmaximize` and
-/// force them to `<Super>Up` / `<Super>Down` if they're empty. We never
-/// clobber a non-empty user-chosen value.
+/// Ensure `wm.keybindings.maximize` is bound to `<Super>Up` on Ubuntu, which
+/// otherwise ships it empty and delegates the keybind to the (often disabled)
+/// `tiling-assistant` extension. We stash whatever the user had and force
+/// the native WM binding if empty. We do NOT touch `unmaximize` here — our
+/// extension owns `Super+Down` via the `restore` keybinding (stashed+cleared
+/// by `conflict_entries`), and the daemon's `restore_focused_window` falls
+/// back to the shim's `Unmaximize` for non-snapped windows.
 fn ensure_maximize_unmaximize(db: &Database) -> Result<()> {
-    for (gkey, default, our_key) in [
-        (
-            "maximize",
-            "['<Super>Up']",
-            "gnome_default_wm_maximize",
-        ),
-        (
-            "unmaximize",
-            "['<Super>Down']",
-            "gnome_default_wm_unmaximize",
-        ),
-    ] {
-        // Stash the current value on first run so `restore_gnome_defaults`
-        // can put it back.
-        if settings::get_setting(db, our_key)?.is_none() {
-            let current = gsettings_get(WM_KB_SCHEMA, gkey)?;
-            settings::set_setting(db, our_key, &current)?;
-        }
-        // If Ubuntu (or some extension) left it empty, put back the native
-        // WM binding so Super+Up / Super+Down keep working.
-        let now = gsettings_get(WM_KB_SCHEMA, gkey)?;
-        if now.trim() == "@as []" || now.trim() == "[]" {
-            gsettings_set(WM_KB_SCHEMA, gkey, default)?;
-        }
+    let gkey = "maximize";
+    let default = "['<Super>Up']";
+    let our_key = "gnome_default_wm_maximize";
+    if settings::get_setting(db, our_key)?.is_none() {
+        let current = gsettings_get(WM_KB_SCHEMA, gkey)?;
+        settings::set_setting(db, our_key, &current)?;
+    }
+    let now = gsettings_get(WM_KB_SCHEMA, gkey)?;
+    if now.trim() == "@as []" || now.trim() == "[]" {
+        gsettings_set(WM_KB_SCHEMA, gkey, default)?;
     }
     Ok(())
 }
@@ -135,13 +133,12 @@ pub fn restore_gnome_defaults(db: &Database) -> Result<()> {
             gsettings_set(schema, &gkey, &stashed)?;
         }
     }
-    for (gkey, our_key) in [
-        ("maximize",   "gnome_default_wm_maximize"),
-        ("unmaximize", "gnome_default_wm_unmaximize"),
-    ] {
-        if let Some(stashed) = settings::get_setting(db, our_key)? {
-            gsettings_set(WM_KB_SCHEMA, gkey, &stashed)?;
-        }
+    // `unmaximize` is already handled via the conflict_entries loop above
+    // (stashed as `gnome_default_wm_unmaximize`). Only `maximize` is
+    // special-cased outside that loop because we merely *restore* it when
+    // empty rather than clobbering it.
+    if let Some(stashed) = settings::get_setting(db, "gnome_default_wm_maximize")? {
+        gsettings_set(WM_KB_SCHEMA, "maximize", &stashed)?;
     }
     Ok(())
 }

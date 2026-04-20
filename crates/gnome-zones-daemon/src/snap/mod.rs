@@ -166,14 +166,54 @@ impl SnapEngine {
             gap,
         );
 
-        // Persist pre-snap rect on first snap.
+        // Persist the window's real pre-snap frame rect so Super+Down
+        // (RestoreFocusedWindow) can put it back later. Only on the first
+        // snap — subsequent snaps/spans shouldn't overwrite it.
         if current_state.zones.is_empty() {
-            self.states.ensure_pre_snap(win_id, target_px).await;
+            match self.mover.frame_rect(win_id).await {
+                Ok(pre) => self.states.ensure_pre_snap(win_id, pre).await,
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    win_id,
+                    "snap: failed to capture pre-snap frame rect (restore-to-original will be unavailable)"
+                ),
+            }
         }
 
         // Execute the move-resize.
         self.mover.move_resize(win_id, target_px).await?;
         self.states.set_zones(win_id, zone_set).await;
+        Ok(())
+    }
+
+    /// Restore the focused window to its pre-snap rect (if the daemon is
+    /// tracking one for it), otherwise fall back to the compositor's native
+    /// unmaximize behaviour. Called by the `RestoreFocusedWindow` D-Bus
+    /// method, which the `gnome-zones-mover` extension binds to `Super+Down`.
+    pub async fn restore_focused_window(&self) -> Result<()> {
+        let paused = {
+            let db = self.db.lock().await;
+            crate::db::settings::get_bool(&db, "paused", false)?
+        };
+        if paused {
+            tracing::debug!("paused — ignoring restore");
+            return Ok(());
+        }
+        let win_id = self.mover.focused_window_id().await?;
+        let state = self.states.get(win_id).await;
+
+        if !state.zones.is_empty() {
+            if let Some(pre) = state.pre_snap {
+                // Snapped and we have a real pre-snap rect — put the
+                // window back and clear tracked zone state.
+                self.mover.move_resize(win_id, pre).await?;
+                self.states.forget(win_id).await;
+                return Ok(());
+            }
+            // Snapped but no pre-snap captured (e.g. pre-migration window):
+            // fall through to native unmaximize so something useful happens.
+        }
+        self.mover.unmaximize(win_id).await?;
         Ok(())
     }
 
@@ -271,6 +311,8 @@ pub(crate) mod testutil {
         pub activations: StdMutex<Vec<u64>>,
         pub windows_in_rect_result: StdMutex<Vec<u64>>,
         pub work_area: StdMutex<PixelRect>,
+        pub frame_rect_result: StdMutex<PixelRect>,
+        pub unmaximized: StdMutex<Vec<u64>>,
     }
 
     impl Default for MockMover {
@@ -282,6 +324,9 @@ pub(crate) mod testutil {
                 windows_in_rect_result: StdMutex::new(Vec::new()),
                 // Matches the tests that assume a 1920×1080 full-monitor work area.
                 work_area: StdMutex::new(PixelRect { x: 0, y: 0, w: 1920, h: 1080 }),
+                // Default pre-snap frame: an off-center 800×600 window.
+                frame_rect_result: StdMutex::new(PixelRect { x: 200, y: 150, w: 800, h: 600 }),
+                unmaximized: StdMutex::new(Vec::new()),
             }
         }
     }
@@ -305,6 +350,13 @@ pub(crate) mod testutil {
         }
         async fn focused_work_area(&self) -> Result<PixelRect> {
             Ok(*self.work_area.lock().unwrap())
+        }
+        async fn frame_rect(&self, _window_id: u64) -> Result<PixelRect> {
+            Ok(*self.frame_rect_result.lock().unwrap())
+        }
+        async fn unmaximize(&self, window_id: u64) -> Result<()> {
+            self.unmaximized.lock().unwrap().push(window_id);
+            Ok(())
         }
     }
 

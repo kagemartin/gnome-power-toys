@@ -137,6 +137,13 @@ impl ZonesInterface {
         self.snap.snap_focused_to_zone(zone_index, span).await.map_err(fdo_error)
     }
 
+    /// Restore the focused window to its pre-snap rect (if tracked) or
+    /// fall back to unmaximizing. Bound to `Super+Down` via the
+    /// `gnome-zones-mover` extension's `restore` keybinding.
+    async fn restore_focused_window(&self) -> fdo::Result<()> {
+        self.snap.restore_focused_window().await.map_err(fdo_error)
+    }
+
     async fn iterate_focused_zone(&self, direction: &str) -> fdo::Result<()> {
         let dir: IterateDir = direction.parse().map_err(|e: String| fdo::Error::Failed(e))?;
         self.snap.iterate_focused_zone(dir).await.map_err(fdo_error)
