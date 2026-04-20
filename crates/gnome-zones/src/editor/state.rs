@@ -141,6 +141,69 @@ impl EditorState {
             self.selected = Some(l.zone_index);
         }
     }
+
+    /// Delete the selected zone. If a single neighbor shares the full edge
+    /// where the deletion happens, extend it to cover the deleted area.
+    pub fn delete_selected(&mut self) {
+        let Some(idx) = self.selected else { return; };
+        let Some(pos) = self.zones.iter().position(|z| z.zone_index == idx) else { return; };
+        let deleted = self.zones[pos];
+
+        let eps = 1e-6;
+        let mut candidates: Vec<(usize, f64)> = Vec::new();
+
+        for (i, n) in self.zones.iter().enumerate() {
+            if i == pos { continue; }
+            let right_matches = (n.x + n.w - deleted.x).abs() < eps
+                && (n.y - deleted.y).abs() < eps
+                && (n.h - deleted.h).abs() < eps;
+            let left_matches  = (n.x - (deleted.x + deleted.w)).abs() < eps
+                && (n.y - deleted.y).abs() < eps
+                && (n.h - deleted.h).abs() < eps;
+            let below_matches = (n.y - (deleted.y + deleted.h)).abs() < eps
+                && (n.x - deleted.x).abs() < eps
+                && (n.w - deleted.w).abs() < eps;
+            let above_matches = (n.y + n.h - deleted.y).abs() < eps
+                && (n.x - deleted.x).abs() < eps
+                && (n.w - deleted.w).abs() < eps;
+
+            if right_matches || left_matches || above_matches || below_matches {
+                candidates.push((i, n.w * n.h));
+            }
+        }
+
+        let chosen = candidates
+            .into_iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        if let Some((ni, _)) = chosen {
+            let n = self.zones[ni];
+            let merged = merge_rects(&n, &deleted);
+            self.zones[ni] = merged;
+            self.zones.remove(pos);
+        } else {
+            self.zones.remove(pos);
+        }
+
+        if self.zones.is_empty() {
+            self.selected = None;
+        } else {
+            self.renumber_row_major();
+            self.selected = Some(self.zones[0].zone_index);
+        }
+    }
+}
+
+fn merge_rects(neighbor: &Zone, deleted: &Zone) -> Zone {
+    let x0 = neighbor.x.min(deleted.x);
+    let y0 = neighbor.y.min(deleted.y);
+    let x1 = (neighbor.x + neighbor.w).max(deleted.x + deleted.w);
+    let y1 = (neighbor.y + neighbor.h).max(deleted.y + deleted.h);
+    Zone {
+        zone_index: neighbor.zone_index,
+        x: x0, y: y0,
+        w: x1 - x0, h: y1 - y0,
+    }
 }
 
 #[cfg(test)]
@@ -273,5 +336,53 @@ mod tests {
         assert!(!s.is_dirty());
         s.split_vertical();
         assert!(s.is_dirty());
+    }
+
+    #[test]
+    fn delete_extends_neighbor_when_edges_match() {
+        let mut s = EditorState::from_layout(&two_col_layout());
+        s.select(2);
+        s.delete_selected();
+        assert_eq!(s.zones.len(), 1);
+        let z = &s.zones[0];
+        assert!((z.x - 0.0).abs() < 1e-9);
+        assert!((z.w - 1.0).abs() < 1e-9);
+        assert!((z.h - 1.0).abs() < 1e-9);
+        assert_eq!(z.zone_index, 1);
+    }
+
+    #[test]
+    fn delete_picks_largest_neighbor_on_tie() {
+        let mut s = EditorState::from_layout(&LayoutWire {
+            id: 1, name: "t".into(), is_preset: false,
+            zones: vec![
+                zw(1, 0.0, 0.0, 1.0, 0.5),
+                zw(2, 0.0, 0.5, 0.5, 0.5),
+                zw(3, 0.5, 0.5, 0.5, 0.5),
+            ],
+        });
+        s.select(1);
+        s.delete_selected();
+        assert_eq!(s.zones.len(), 2);
+    }
+
+    #[test]
+    fn delete_last_zone_leaves_empty_layout() {
+        let mut s = EditorState::from_layout(&LayoutWire {
+            id: 1, name: "t".into(), is_preset: false,
+            zones: vec![zw(1, 0.0, 0.0, 1.0, 1.0)],
+        });
+        s.select(1);
+        s.delete_selected();
+        assert!(s.zones.is_empty());
+        assert_eq!(s.selected, None);
+    }
+
+    #[test]
+    fn delete_without_selection_is_noop() {
+        let mut s = EditorState::from_layout(&two_col_layout());
+        s.selected = None;
+        s.delete_selected();
+        assert_eq!(s.zones.len(), 2);
     }
 }
