@@ -1,0 +1,7 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: gnome-clips
+Source: https://github.com/gnome-power-toys/gnome-clips
+
+Files: *
+Copyright: 2026 gnome-power-toys contributors
+License: MIT
