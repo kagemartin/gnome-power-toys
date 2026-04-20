@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=gnome-clips
+Comment=Clipboard history manager
+Exec=gnome-clips
+Icon=org.gnome.Clips
+Terminal=false
+Type=Application
+Categories=Utility;GTK;
+StartupNotify=true
