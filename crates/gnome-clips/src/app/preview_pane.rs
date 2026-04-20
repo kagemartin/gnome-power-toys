@@ -119,9 +119,5 @@ impl PreviewPane {
         }
     }
 
-    pub fn clear(&self) {
-        self.text_view.buffer().set_text("");
-        self.meta_label.set_text("Select a clip to preview");
-    }
 }
 

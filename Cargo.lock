@@ -812,6 +812,7 @@ dependencies = [
  "libadwaita",
  "serde",
  "thiserror",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "zbus",

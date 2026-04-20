@@ -11,6 +11,12 @@ path = "src/main.rs"
 gtk4         = { version = "0.9", features = ["v4_12"] }
 libadwaita   = { version = "0.7", features = ["v1_5"] }
 zbus         = "4"
+# tokio is pulled in unconditionally through the workspace's feature
+# unification (gnome-clips-daemon enables zbus/tokio); if the UI doesn't
+# provide a running runtime, zbus's async ops panic with
+# "there is no reactor running". We keep a multi-threaded runtime alive
+# for the process lifetime and enter it on the main thread.
+tokio        = { version = "1", features = ["rt-multi-thread"] }
 ksni         = "0.2"
 futures-util = "0.3"
 async-channel = "2"

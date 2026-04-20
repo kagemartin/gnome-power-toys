@@ -56,10 +56,36 @@ impl ClipList {
         }
     }
 
-    /// Give the ListBox keyboard focus so arrow keys and Enter act on
-    /// the selected row without the user first tabbing to it.
-    pub fn focus(&self) {
-        self.list_box.grab_focus();
+    #[cfg(test)]
+    pub fn child_count(&self) -> usize {
+        let mut n = 0;
+        let mut c = self.list_box.first_child();
+        while let Some(ch) = c {
+            n += 1;
+            c = ch.next_sibling();
+        }
+        n
+    }
+
+    /// Move keyboard focus to the currently selected row (falling back to
+    /// row 0). Grabbing on a ListBoxRow lets arrow keys navigate siblings
+    /// immediately; grabbing on the ListBox container does not, which is
+    /// why we target the row.
+    pub fn focus_selected_row(&self) {
+        let row = self
+            .list_box
+            .selected_row()
+            .or_else(|| self.list_box.row_at_index(0));
+        if let Some(row) = row {
+            row.grab_focus();
+        } else {
+            self.list_box.grab_focus();
+        }
+    }
+
+    /// Raw ListBox ref for the window to use as its initial focus target.
+    pub fn focus_target(&self) -> &ListBox {
+        &self.list_box
     }
 
     fn append_clip<F>(&self, clip: &ClipSummary, on_delete: F)

@@ -13,10 +13,11 @@ use crate::dbus::ClipsProxy;
 
 pub struct ClipsWindow {
     pub window: ApplicationWindow,
+    // Kept for show()'s `focus_selected_row` + re-fetch on re-present.
+    // The tray, keyboard controller, and D-Bus signal subscriptions all
+    // hold their own strong refs to the other widgets via closures, so
+    // they stay alive whether we store them here or not.
     pub clip_list: Rc<ClipList>,
-    pub preview: Rc<PreviewPane>,
-    pub proxy: ClipsProxy<'static>,
-    pub selected_id: Rc<Cell<Option<i64>>>,
     pub refresh: Rc<RefCell<Box<dyn Fn()>>>,
 }
 
@@ -52,6 +53,19 @@ impl ClipsWindow {
         paned.set_vexpand(true);
         vbox.append(&paned);
         window.set_child(Some(&vbox));
+        // Make the ListBox the window's initial focus target — otherwise
+        // GTK picks the first focusable child, which in our layout is a
+        // ToggleButton or the paste button.
+        gtk4::prelude::GtkWindowExt::set_focus(&window, Some(clip_list.focus_target()));
+
+        // Every time the window is mapped (first show, and each re-show
+        // after hiding), re-assert focus on the selected list row.
+        {
+            let clip_list = clip_list.clone();
+            window.connect_map(move |_| {
+                clip_list.focus_selected_row();
+            });
+        }
 
         let refresh: Rc<RefCell<Box<dyn Fn()>>> = {
             let proxy = proxy.clone();
@@ -64,10 +78,8 @@ impl ClipsWindow {
                 let filter = filter_bar.active_filter().to_string();
                 let search = filter_bar.search.text().to_string();
                 glib::MainContext::default().spawn_local(async move {
-                    tracing::info!(%filter, %search, "refresh fetch");
                     match proxy_fetch.get_history(&filter, &search, 0, 200).await {
                         Ok(result) => {
-                            tracing::info!(count = result.len(), "refresh got clips");
                             let proxy_del = proxy_del.clone();
                             clip_list.populate(&result, move |id| {
                                 let proxy = proxy_del.clone();
@@ -180,16 +192,12 @@ impl ClipsWindow {
             let window = window.clone();
             let proxy = proxy.clone();
             Rc::new(move |id: i64| {
-                tracing::info!(clip_id = id, "paste invoked");
                 let window = window.clone();
                 let proxy = proxy.clone();
                 glib::MainContext::default().spawn_local(async move {
-                    match proxy.paste(id).await {
-                        Ok(()) => tracing::info!(clip_id = id, "daemon paste ok"),
-                        Err(e) => {
-                            tracing::warn!(error = %e, clip_id = id, "daemon paste failed");
-                            return;
-                        }
+                    if let Err(e) = proxy.paste(id).await {
+                        tracing::warn!(error = %e, clip_id = id, "daemon paste failed");
+                        return;
                     }
                     window.set_visible(false);
                     // Ask the shell extension to re-focus the previously-
@@ -205,7 +213,6 @@ impl ClipsWindow {
             let selected_id = selected_id.clone();
             preview.paste_btn.connect_clicked(move |_| {
                 if let Some(id) = selected_id.get() {
-                    tracing::info!(clip_id = id, "paste source=button");
                     paste(id);
                 }
             });
@@ -214,10 +221,7 @@ impl ClipsWindow {
         // Double-click / Enter on a row → paste.
         {
             let paste = paste.clone();
-            clip_list.connect_row_activated(move |id| {
-                tracing::info!(clip_id = id, "paste source=row_activated");
-                paste(id);
-            });
+            clip_list.connect_row_activated(move |id| paste(id));
         }
 
         // Keyboard shortcuts. Installed AFTER `paste` is built so Enter
@@ -238,7 +242,6 @@ impl ClipsWindow {
                     }
                     (Key::Return | Key::KP_Enter, false) => {
                         if let Some(id) = clip_list_ref.selected_clip_id() {
-                            tracing::info!(clip_id = id, "paste source=enter");
                             paste(id);
                         }
                         glib::Propagation::Stop
@@ -322,20 +325,29 @@ impl ClipsWindow {
         Self {
             window,
             clip_list,
-            preview,
-            proxy,
-            selected_id,
             refresh,
         }
     }
 
     pub fn show(&self) {
+        // Re-assert the focus target before present() — the window may
+        // have moved focus to another widget (e.g. search Entry after
+        // the user typed in it) on the previous activation.
+        gtk4::prelude::GtkWindowExt::set_focus(
+            &self.window,
+            Some(self.clip_list.focus_target()),
+        );
         self.window.present();
         // Re-fetch so the MRU-on-paste reordering from the previous
-        // dismissal is reflected even if the signal raced, and focus
-        // the list so Enter pastes the top entry immediately.
+        // dismissal is reflected even if the signal raced.
         (self.refresh.borrow())();
-        self.clip_list.focus();
+        // Defer a grab to the next main-loop iteration — by then the
+        // window is mapped and populate has completed, so focus actually
+        // sticks on the first row.
+        let clip_list = self.clip_list.clone();
+        glib::idle_add_local_once(move || {
+            clip_list.focus_selected_row();
+        });
     }
     pub fn hide(&self) {
         self.window.set_visible(false);

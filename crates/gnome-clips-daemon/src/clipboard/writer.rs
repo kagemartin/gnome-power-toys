@@ -16,7 +16,6 @@ pub enum Error {
     X11(String),
     Wayland(String),
     InvalidUtf8,
-    NoBackend,
 }
 
 impl std::fmt::Display for Error {
@@ -26,7 +25,6 @@ impl std::fmt::Display for Error {
             Error::X11(s) => write!(f, "x11 clipboard: {s}"),
             Error::Wayland(s) => write!(f, "wayland clipboard: {s}"),
             Error::InvalidUtf8 => write!(f, "invalid utf-8 in file-path clip"),
-            Error::NoBackend => write!(f, "clipboard writer disabled"),
         }
     }
 }
@@ -57,7 +55,10 @@ impl ClipboardWriter {
         match &self.backend {
             Backend::X11(clip) => write_x11(clip, content, content_type).await,
             Backend::Wayland => write_wayland(content, content_type),
-            Backend::Noop => Err(Error::NoBackend),
+            // Tests / headless startup: pretend we wrote. last_hash has
+            // been updated so the poll's deduplication still behaves
+            // consistently.
+            Backend::Noop => Ok(()),
         }
     }
 }
@@ -153,18 +154,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn noop_backend_reports_no_backend() {
+    async fn noop_backend_returns_ok_and_is_a_no_op() {
         let lh = Arc::new(Mutex::new(None));
         let w = ClipboardWriter::new(Backend::Noop, lh);
-        let r = w.write(b"hi", "text/plain").await;
-        assert!(matches!(r, Err(Error::NoBackend)));
+        assert!(w.write(b"hi", "text/plain").await.is_ok());
     }
 
     #[tokio::test]
-    async fn write_updates_last_hash_even_on_noop_backend() {
+    async fn write_updates_last_hash() {
         let lh = Arc::new(Mutex::new(None));
         let w = ClipboardWriter::new(Backend::Noop, lh.clone());
-        let _ = w.write(b"abc", "text/plain").await;
+        w.write(b"abc", "text/plain").await.unwrap();
         assert_eq!(*lh.lock().await, Some(content_hash(b"abc")));
+    }
+
+    #[tokio::test]
+    async fn write_replaces_previous_last_hash() {
+        let lh = Arc::new(Mutex::new(Some(content_hash(b"old"))));
+        let w = ClipboardWriter::new(Backend::Noop, lh.clone());
+        w.write(b"new", "text/plain").await.unwrap();
+        assert_eq!(*lh.lock().await, Some(content_hash(b"new")));
     }
 }

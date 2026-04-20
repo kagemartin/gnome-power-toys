@@ -130,35 +130,7 @@ impl ClipsInterface {
         #[zbus(signal_context)] ctx: zbus::SignalContext<'_>,
         id: i64,
     ) -> zbus::fdo::Result<()> {
-        let clip = {
-            let db = self.db.lock().unwrap();
-            get_clip(&db, id)
-                .map_err(map_err)?
-                .ok_or_else(|| zbus::fdo::Error::Failed(format!("clip {id} not found")))?
-        };
-        self.writer
-            .write(&clip.content, &clip.content_type)
-            .await
-            .map_err(map_err)?;
-
-        // Mark this clip most-recent and publish the new state.
-        let summary = {
-            let db = self.db.lock().unwrap();
-            touch_clip(&db, id).map_err(map_err)?;
-            let row = get_clip(&db, id)
-                .map_err(map_err)?
-                .ok_or_else(|| zbus::fdo::Error::Failed(format!("clip {id} disappeared")))?;
-            let tags = get_clip_tags(&db, id).map_err(map_err)?;
-            ClipSummary {
-                id: row.id,
-                content_type: row.content_type,
-                preview: row.preview.unwrap_or_default(),
-                source_app: row.source_app.unwrap_or_default(),
-                created_at: row.created_at,
-                pinned: row.pinned,
-                tags,
-            }
-        };
+        let summary = self.paste_core(id).await?;
         Self::clip_updated(&ctx, summary).await.ok();
         Ok(())
     }
@@ -174,6 +146,42 @@ impl ClipsInterface {
 
     #[zbus(signal)]
     pub async fn incognito_changed(ctx: &zbus::SignalContext<'_>, enabled: bool) -> zbus::Result<()>;
+}
+
+// Non-zbus helpers. Kept in a separate impl block so the `#[interface]`
+// macro doesn't try to expose them over D-Bus.
+impl ClipsInterface {
+    /// The write + touch_clip + summary-build that `paste` wraps with a
+    /// `ClipUpdated` emission. Split out so tests can exercise the
+    /// composition without needing a live `SignalContext`.
+    pub(crate) async fn paste_core(&self, id: i64) -> zbus::fdo::Result<ClipSummary> {
+        let clip = {
+            let db = self.db.lock().unwrap();
+            get_clip(&db, id)
+                .map_err(map_err)?
+                .ok_or_else(|| zbus::fdo::Error::Failed(format!("clip {id} not found")))?
+        };
+        self.writer
+            .write(&clip.content, &clip.content_type)
+            .await
+            .map_err(map_err)?;
+
+        let db = self.db.lock().unwrap();
+        touch_clip(&db, id).map_err(map_err)?;
+        let row = get_clip(&db, id)
+            .map_err(map_err)?
+            .ok_or_else(|| zbus::fdo::Error::Failed(format!("clip {id} disappeared")))?;
+        let tags = get_clip_tags(&db, id).map_err(map_err)?;
+        Ok(ClipSummary {
+            id: row.id,
+            content_type: row.content_type,
+            preview: row.preview.unwrap_or_default(),
+            source_app: row.source_app.unwrap_or_default(),
+            created_at: row.created_at,
+            pinned: row.pinned,
+            tags,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -237,5 +245,61 @@ mod tests {
         iface.set_pinned(id, true).await.unwrap();
         let clips_after = iface.get_history("".to_string(), "".to_string(), 0, 100).await.unwrap();
         assert!(clips_after[0].pinned);
+    }
+
+    #[tokio::test]
+    async fn paste_core_returns_updated_summary() {
+        let iface = test_iface().await;
+        let clips = iface.get_history("".to_string(), "".to_string(), 0, 1).await.unwrap();
+        let id = clips[0].id;
+        let before = clips[0].created_at;
+
+        // Backdate so the bump is observable regardless of wall-clock granularity.
+        {
+            let db = iface.db.lock().unwrap();
+            db.conn
+                .execute(
+                    "UPDATE clips SET created_at = ?1 WHERE id = ?2",
+                    rusqlite::params![before - 1000, id],
+                )
+                .unwrap();
+        }
+
+        let summary = iface.paste_core(id).await.unwrap();
+        assert_eq!(summary.id, id);
+        assert!(summary.created_at > before - 1000, "paste should bump created_at");
+    }
+
+    #[tokio::test]
+    async fn paste_core_moves_older_clip_to_top() {
+        let iface = test_iface().await;
+        let older_id = {
+            let db = iface.db.lock().unwrap();
+            // test_iface already inserted one; add a second clip so we can
+            // observe reordering after paste.
+            let newer = insert_clip(&db, b"newer", "text/plain", None, None).unwrap();
+            // The first-inserted clip has id=1; make sure `newer` is strictly
+            // newer by backdating the original (1000 seconds in the past).
+            db.conn
+                .execute("UPDATE clips SET created_at = 1000 WHERE id = 1", [])
+                .unwrap();
+            db.conn
+                .execute("UPDATE clips SET created_at = 2000 WHERE id = ?1", rusqlite::params![newer])
+                .unwrap();
+            1i64
+        };
+
+        // Paste the older clip: it should become most-recent.
+        iface.paste_core(older_id).await.unwrap();
+
+        let clips = iface.get_history("".to_string(), "".to_string(), 0, 10).await.unwrap();
+        assert_eq!(clips[0].id, older_id, "pasted clip should sort first");
+    }
+
+    #[tokio::test]
+    async fn paste_core_returns_error_for_missing_clip() {
+        let iface = test_iface().await;
+        let err = iface.paste_core(9999).await.unwrap_err();
+        assert!(err.to_string().contains("9999"));
     }
 }
