@@ -1,6 +1,6 @@
 use crate::activator::state::{handle_key, ActivatorAction};
 use crate::dbus::ZonesProxy;
-use crate::overlay::{build_overlay, monitor_for_key, KeyMode};
+use crate::overlay::{build_overlay, monitor_for_key, present_overlay, KeyMode};
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{Align, EventControllerKey, Fixed, Label};
@@ -117,8 +117,8 @@ pub fn show(
             },
         );
 
-        window.present();
+        present_overlay(&window);
     });
 
-    window.present();
+    present_overlay(&window);
 }

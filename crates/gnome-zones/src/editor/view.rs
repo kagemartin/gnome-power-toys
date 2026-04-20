@@ -1,9 +1,9 @@
 use crate::dbus::{LayoutSummaryWire, LayoutWire, ZonesProxy};
 use crate::editor::state::{EditorState, Zone};
-use crate::overlay::{build_overlay, monitor_for_key, KeyMode};
+use crate::overlay::{build_overlay, monitor_for_key, present_overlay, KeyMode};
 use gtk4::gdk;
 use gtk4::prelude::*;
-use gtk4::{Align, ApplicationWindow, Box as GBox, Fixed, GestureClick, Label, Orientation};
+use gtk4::{Align, ApplicationWindow, Box as GBox, EventControllerKey, Fixed, GestureClick, Label, Orientation};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -73,8 +73,27 @@ impl EditorView {
 
         view.build_toolbar(&all_layouts);
         view.wire_canvas_drag();
+        view.wire_escape_key();
         view.rerender();
         Some(view)
+    }
+
+    /// Escape on the editor overlay closes it without saving. This is the
+    /// only keyboard-driven dismiss path on X11, where overlay input may be
+    /// the only way out if the toolbar is off-screen or covered.
+    fn wire_escape_key(self: &Rc<Self>) {
+        let key_ctrl = EventControllerKey::new();
+        let view = Rc::downgrade(self);
+        key_ctrl.connect_key_pressed(move |_ctrl, keyval, _keycode, _state| {
+            if keyval.name().map(|s| s.as_str() == "Escape").unwrap_or(false) {
+                if let Some(v) = view.upgrade() {
+                    v.window.close();
+                }
+                return gtk4::glib::Propagation::Stop;
+            }
+            gtk4::glib::Propagation::Proceed
+        });
+        self.window.add_controller(key_ctrl);
     }
 
     /// Rebuild all zone rectangles + divider handles from scratch.
@@ -602,6 +621,6 @@ pub fn show(
             tracing::warn!("editor: failed to build view (no display or monitors)");
             return;
         };
-        view.window.present();
+        present_overlay(&view.window);
     });
 }

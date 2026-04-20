@@ -3,6 +3,18 @@ use gtk4::prelude::*;
 use gtk4::ApplicationWindow;
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
+/// Present a window with a non-zero X11 timestamp so the window manager
+/// honours the focus request instead of logging "Buggy client sent a
+/// _NET_ACTIVE_WINDOW message with a timestamp of 0".
+///
+/// On Wayland (layer-shell path) this is irrelevant but harmless. On X11
+/// the GTK WM needs a valid, monotonically-increasing timestamp to pass
+/// focus-stealing prevention; we use `glib::monotonic_time()` cast to u32.
+pub fn present_overlay(window: &ApplicationWindow) {
+    let t = (gtk4::glib::monotonic_time() as u32).max(1);
+    window.present_with_time(t);
+}
+
 /// How the overlay should interact with keyboard input.
 #[derive(Debug, Clone, Copy)]
 pub enum KeyMode {
