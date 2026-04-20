@@ -4,6 +4,7 @@ Priority: optional
 Maintainer: gnome-power-toys contributors <noreply@example.com>
 Build-Depends: debhelper-compat (= 13), cargo, rustc,
                libgtk-4-dev, libadwaita-1-dev,
+               libgtk4-layer-shell-dev,
                libssl-dev, pkg-config
 Standards-Version: 4.6.0
 Homepage: https://github.com/gnome-power-toys/gnome-power-toys
@@ -26,6 +27,7 @@ Package: gnome-zones
 Architecture: amd64
 Depends: ${shlibs:Depends}, ${misc:Depends},
          libgtk-4-1, libadwaita-1-0,
+         libgtk4-layer-shell0,
          gnome-shell, systemd,
          gnome-power-toys-extensions (>= ${source:Version})
 Description: Window-zone layout manager for GNOME (gnome-power-toys)

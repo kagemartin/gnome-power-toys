@@ -11,6 +11,13 @@ override_dh_auto_build:
 override_dh_auto_test:
 	cargo test --workspace
 
+# Some dev machines have libgtk4-layer-shell installed under /usr/local
+# (not from apt), which makes dpkg-shlibdeps fail to find a backing package.
+# The explicit Depends in debian/control covers the runtime requirement;
+# --ignore-missing-info lets the local build succeed regardless of layout.
+override_dh_shlibdeps:
+	dh_shlibdeps -- --ignore-missing-info
+
 override_dh_auto_install:
 	# gnome-clips binary package
 	install -Dm755 target/release/gnome-clips-daemon \
