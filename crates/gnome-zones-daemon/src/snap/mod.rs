@@ -575,4 +575,89 @@ mod tests {
         engine.cycle_focus_in_zone(1).await.unwrap();
         assert!(mover.activations.lock().unwrap().is_empty());
     }
+
+    // --- restore_focused_window -----------------------------------------
+
+    #[tokio::test]
+    async fn snap_records_real_pre_snap_rect_not_destination() {
+        // Regression: previously `ensure_pre_snap` was called with the
+        // target rect, so restore-to-original silently no-op'd. After the
+        // fix, the mover's frame_rect is what gets stashed.
+        let mover = Arc::new(MockMover::default());
+        *mover.focused.lock().unwrap() = 42;
+        *mover.frame_rect_result.lock().unwrap() =
+            PixelRect { x: 123, y: 77, w: 640, h: 480 };
+        let engine = temp_engine_with_mover(
+            mover.clone(),
+            vec![primary_monitor("DP-1:test", 1920, 1080)],
+        );
+        engine.snap_focused_to_zone(1, false).await.unwrap();
+        let state = engine.states.get(42).await;
+        assert_eq!(state.pre_snap, Some(PixelRect { x: 123, y: 77, w: 640, h: 480 }));
+    }
+
+    #[tokio::test]
+    async fn restore_with_tracked_pre_snap_moves_back_and_clears_state() {
+        let mover = Arc::new(MockMover::default());
+        *mover.focused.lock().unwrap() = 42;
+        *mover.frame_rect_result.lock().unwrap() =
+            PixelRect { x: 200, y: 150, w: 800, h: 600 };
+        let engine = temp_engine_with_mover(
+            mover.clone(),
+            vec![primary_monitor("DP-1:test", 1920, 1080)],
+        );
+        engine.snap_focused_to_zone(1, false).await.unwrap();
+        let moves_before = mover.moves.lock().unwrap().len();
+
+        engine.restore_focused_window().await.unwrap();
+
+        // Last move should be to the pre-snap rect.
+        let moves = mover.moves.lock().unwrap().clone();
+        assert_eq!(moves.len(), moves_before + 1);
+        let (win_id, rect) = moves.last().copied().unwrap();
+        assert_eq!(win_id, 42);
+        assert_eq!(rect, PixelRect { x: 200, y: 150, w: 800, h: 600 });
+        // Tracked state gone so subsequent span/snap starts fresh.
+        let state = engine.states.get(42).await;
+        assert!(state.zones.is_empty());
+        assert_eq!(state.pre_snap, None);
+        // No unmaximize on the happy restore path.
+        assert!(mover.unmaximized.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn restore_on_untracked_window_falls_back_to_unmaximize() {
+        let mover = Arc::new(MockMover::default());
+        *mover.focused.lock().unwrap() = 42;
+        let engine = temp_engine_with_mover(
+            mover.clone(),
+            vec![primary_monitor("DP-1:test", 1920, 1080)],
+        );
+        // Never snapped → no tracked state.
+        engine.restore_focused_window().await.unwrap();
+
+        // Fall-through: unmaximize should have been called on the focused id.
+        let unmax = mover.unmaximized.lock().unwrap().clone();
+        assert_eq!(unmax, vec![42]);
+        // No geometry changes.
+        assert!(mover.moves.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn restore_respects_paused_setting() {
+        let mover = Arc::new(MockMover::default());
+        *mover.focused.lock().unwrap() = 42;
+        let engine = temp_engine_with_mover(
+            mover.clone(),
+            vec![primary_monitor("DP-1:test", 1920, 1080)],
+        );
+        // Enable pause.
+        {
+            let db = engine.db.lock().await;
+            crate::db::settings::set_setting(&db, "paused", "true").unwrap();
+        }
+        engine.restore_focused_window().await.unwrap();
+        assert!(mover.moves.lock().unwrap().is_empty());
+        assert!(mover.unmaximized.lock().unwrap().is_empty());
+    }
 }
