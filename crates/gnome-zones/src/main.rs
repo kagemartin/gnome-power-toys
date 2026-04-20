@@ -39,6 +39,21 @@ fn main() {
         //   --activator  → open activator on the chosen monitor, exit when dismissed
         //   (default)    → panel mode: background process with tray + signal subscriptions
 
+        if cli.editor || cli.activator {
+            // CLI single-shot modes build their overlay asynchronously. Hold
+            // the GtkApplication so it doesn't exit before the spawn_local
+            // task creates a window; drop the guard when the user closes the
+            // overlay (no windows left → app can exit).
+            use gtk4::gio::prelude::ApplicationExtManual;
+            let guard = std::rc::Rc::new(std::cell::RefCell::new(Some(app.hold())));
+            let guard_for_cb = guard.clone();
+            app.connect_window_removed(move |app, _| {
+                if app.windows().is_empty() {
+                    let _ = guard_for_cb.borrow_mut().take();
+                }
+            });
+        }
+
         if cli.editor {
             let app_c = app.clone();
             let proxy_c = proxy.clone();
@@ -65,7 +80,9 @@ fn main() {
         run_panel_mode(app, proxy.clone(), rt_handle.clone());
     });
 
-    application.run();
+    // clap has already consumed argv; hand GTK an empty arg list so it doesn't
+    // choke on flags like --editor / --activator that it doesn't recognize.
+    application.run_with_args::<&str>(&[]);
     drop(rt);
 }
 

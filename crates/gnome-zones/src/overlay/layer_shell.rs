@@ -27,7 +27,16 @@ pub fn build_overlay(
 
     window.add_css_class("gnome-zones-overlay");
 
-    if gtk4_layer_shell::is_supported() {
+    // `gtk4_layer_shell::is_supported()` reflects whether the C library is
+    // present, not whether the current display is Wayland. Calling
+    // `init_layer_shell` on an X11 display triggers a GDK_IS_WAYLAND_DISPLAY
+    // assertion inside the layer-shell library. Gate on the compositor env
+    // instead — `WAYLAND_DISPLAY` is set only by Wayland sessions.
+    let on_wayland = std::env::var_os("WAYLAND_DISPLAY")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+
+    if on_wayland && gtk4_layer_shell::is_supported() {
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
         window.set_monitor(monitor);
