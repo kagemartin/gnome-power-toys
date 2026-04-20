@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: gnome-power-toys contributors <noreply@example.com>
 Build-Depends: debhelper-compat (= 13), cargo, rustc,
                libgtk-4-dev, libadwaita-1-dev,
-               libgtk4-layer-shell-dev,
+               meson, ninja-build, libwayland-dev,
                libssl-dev, pkg-config
 Standards-Version: 4.6.0
 Homepage: https://github.com/gnome-power-toys/gnome-power-toys
@@ -23,11 +23,14 @@ Description: Clipboard history manager for GNOME (gnome-power-toys)
  Part of the gnome-power-toys suite. Install the gnome-power-toys
  metapackage to get every tool at once.
 
+# gnome-zones vendors libgtk4-layer-shell under /usr/lib/gnome-power-toys
+# (built from third_party/gtk4-layer-shell during the deb build). The binary
+# uses an $ORIGIN-relative RPATH to find it, so no external runtime dep on
+# libgtk4-layer-shell* is required or declared.
 Package: gnome-zones
 Architecture: amd64
 Depends: ${shlibs:Depends}, ${misc:Depends},
          libgtk-4-1, libadwaita-1-0,
-         libgtk4-layer-shell0,
          gnome-shell, systemd,
          gnome-power-toys-extensions (>= ${source:Version})
 Description: Window-zone layout manager for GNOME (gnome-power-toys)
