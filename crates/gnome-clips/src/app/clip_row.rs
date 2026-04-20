@@ -7,7 +7,6 @@ use crate::util::{friendly_age, friendly_type, type_icon};
 pub struct ClipRow {
     pub container: GBox,
     pub delete_btn: Button,
-    pub id: i64,
 }
 
 impl ClipRow {
@@ -65,7 +64,6 @@ impl ClipRow {
         Self {
             container,
             delete_btn,
-            id: clip.id,
         }
     }
 }

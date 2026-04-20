@@ -49,13 +49,43 @@ impl ClipList {
             self.append_clip(clip, on_delete.clone());
         }
 
+        // Auto-select the first row so Super+V → Enter pastes the most
+        // recent clip with no extra keystrokes.
+        if let Some(first) = self.list_box.row_at_index(0) {
+            self.list_box.select_row(Some(&first));
+        }
+    }
+
+    #[cfg(test)]
+    pub fn child_count(&self) -> usize {
         let mut n = 0;
         let mut c = self.list_box.first_child();
         while let Some(ch) = c {
             n += 1;
             c = ch.next_sibling();
         }
-        tracing::info!(rows = n, "clip_list populated");
+        n
+    }
+
+    /// Move keyboard focus to the currently selected row (falling back to
+    /// row 0). Grabbing on a ListBoxRow lets arrow keys navigate siblings
+    /// immediately; grabbing on the ListBox container does not, which is
+    /// why we target the row.
+    pub fn focus_selected_row(&self) {
+        let row = self
+            .list_box
+            .selected_row()
+            .or_else(|| self.list_box.row_at_index(0));
+        if let Some(row) = row {
+            row.grab_focus();
+        } else {
+            self.list_box.grab_focus();
+        }
+    }
+
+    /// Raw ListBox ref for the window to use as its initial focus target.
+    pub fn focus_target(&self) -> &ListBox {
+        &self.list_box
     }
 
     fn append_clip<F>(&self, clip: &ClipSummary, on_delete: F)

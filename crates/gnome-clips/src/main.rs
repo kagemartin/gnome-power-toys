@@ -19,11 +19,23 @@ fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    // Workspace feature unification compiles zbus with the tokio feature
+    // (the daemon enables it), so zbus expects a running tokio runtime
+    // even though the UI's event loop is GLib. Keep a multi-threaded
+    // runtime alive for the process lifetime and enter it on the main
+    // thread so any zbus future polled via glib::spawn_local can call
+    // tokio::Handle::current() without panicking.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+    let _rt_guard = rt.handle().clone().enter();
+
     // Remove any stale media-keys entry we may have written in older builds
     // before we switched to a shell extension. Idempotent, no-op if absent.
     shortcut::cleanup_legacy_media_keys_entry();
 
-    let proxy = glib::MainContext::default()
+    let proxy = rt
         .block_on(dbus::connect())
         .expect("failed to connect to gnome-clips-daemon — is the daemon running?");
 
@@ -45,6 +57,11 @@ fn main() {
     });
 
     application.run();
+
+    // Keep the tokio runtime alive until the GTK main loop returns. The
+    // underscore binding already holds `_rt_guard`; this explicit drop
+    // is just here to make the lifetime obvious.
+    drop(rt);
 }
 
 struct AppState {

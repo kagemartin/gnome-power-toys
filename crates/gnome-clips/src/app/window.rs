@@ -13,10 +13,11 @@ use crate::dbus::ClipsProxy;
 
 pub struct ClipsWindow {
     pub window: ApplicationWindow,
+    // Kept for show()'s `focus_selected_row` + re-fetch on re-present.
+    // The tray, keyboard controller, and D-Bus signal subscriptions all
+    // hold their own strong refs to the other widgets via closures, so
+    // they stay alive whether we store them here or not.
     pub clip_list: Rc<ClipList>,
-    pub preview: Rc<PreviewPane>,
-    pub proxy: ClipsProxy<'static>,
-    pub selected_id: Rc<Cell<Option<i64>>>,
     pub refresh: Rc<RefCell<Box<dyn Fn()>>>,
 }
 
@@ -52,6 +53,19 @@ impl ClipsWindow {
         paned.set_vexpand(true);
         vbox.append(&paned);
         window.set_child(Some(&vbox));
+        // Make the ListBox the window's initial focus target — otherwise
+        // GTK picks the first focusable child, which in our layout is a
+        // ToggleButton or the paste button.
+        gtk4::prelude::GtkWindowExt::set_focus(&window, Some(clip_list.focus_target()));
+
+        // Every time the window is mapped (first show, and each re-show
+        // after hiding), re-assert focus on the selected list row.
+        {
+            let clip_list = clip_list.clone();
+            window.connect_map(move |_| {
+                clip_list.focus_selected_row();
+            });
+        }
 
         let refresh: Rc<RefCell<Box<dyn Fn()>>> = {
             let proxy = proxy.clone();
@@ -64,10 +78,8 @@ impl ClipsWindow {
                 let filter = filter_bar.active_filter().to_string();
                 let search = filter_bar.search.text().to_string();
                 glib::MainContext::default().spawn_local(async move {
-                    tracing::info!(%filter, %search, "refresh fetch");
                     match proxy_fetch.get_history(&filter, &search, 0, 200).await {
                         Ok(result) => {
-                            tracing::info!(count = result.len(), "refresh got clips");
                             let proxy_del = proxy_del.clone();
                             clip_list.populate(&result, move |id| {
                                 let proxy = proxy_del.clone();
@@ -185,8 +197,12 @@ impl ClipsWindow {
                 glib::MainContext::default().spawn_local(async move {
                     if let Err(e) = proxy.paste(id).await {
                         tracing::warn!(error = %e, clip_id = id, "daemon paste failed");
+                        return;
                     }
                     window.set_visible(false);
+                    // Ask the shell extension to re-focus the previously-
+                    // focused window and synthesize the paste shortcut.
+                    request_inject_paste(&proxy).await;
                 });
             })
         };
@@ -264,7 +280,8 @@ impl ClipsWindow {
         }
         window.add_controller(key_controller);
 
-        // Live updates — ClipAdded / ClipDeleted refresh the list.
+        // Live updates — ClipAdded / ClipDeleted / ClipUpdated refresh the list.
+        // ClipUpdated fires after a paste so the MRU reordering is reflected.
         {
             let proxy_sig = proxy.clone();
             let refresh = refresh.clone();
@@ -289,6 +306,18 @@ impl ClipsWindow {
                 }
             });
         }
+        {
+            let proxy_sig = proxy.clone();
+            let refresh = refresh.clone();
+            glib::MainContext::default().spawn_local(async move {
+                use futures_util::StreamExt;
+                if let Ok(mut stream) = proxy_sig.receive_clip_updated().await {
+                    while stream.next().await.is_some() {
+                        (refresh.borrow())();
+                    }
+                }
+            });
+        }
 
         // Initial load.
         (refresh.borrow())();
@@ -296,15 +325,29 @@ impl ClipsWindow {
         Self {
             window,
             clip_list,
-            preview,
-            proxy,
-            selected_id,
             refresh,
         }
     }
 
     pub fn show(&self) {
+        // Re-assert the focus target before present() — the window may
+        // have moved focus to another widget (e.g. search Entry after
+        // the user typed in it) on the previous activation.
+        gtk4::prelude::GtkWindowExt::set_focus(
+            &self.window,
+            Some(self.clip_list.focus_target()),
+        );
         self.window.present();
+        // Re-fetch so the MRU-on-paste reordering from the previous
+        // dismissal is reflected even if the signal raced.
+        (self.refresh.borrow())();
+        // Defer a grab to the next main-loop iteration — by then the
+        // window is mapped and populate has completed, so focus actually
+        // sticks on the first row.
+        let clip_list = self.clip_list.clone();
+        glib::idle_add_local_once(move || {
+            clip_list.focus_selected_row();
+        });
     }
     pub fn hide(&self) {
         self.window.set_visible(false);
@@ -315,5 +358,30 @@ impl ClipsWindow {
         } else {
             self.show();
         }
+    }
+}
+
+/// Call the gnome-clips-toggle shell extension's InjectPaste method,
+/// which refocuses the pre-popup window and synthesizes Ctrl+V (or
+/// Ctrl+Shift+V for terminals) so the chosen clip actually lands in
+/// the target app. If the extension isn't installed/running the call
+/// fails quietly — the user can still manually Ctrl+V the clipboard.
+///
+/// Reuses the existing daemon proxy's zbus Connection so we don't
+/// spin up a second connection from inside a glib::spawn_local —
+/// constructing one there hits zbus's runtime detection and panics.
+async fn request_inject_paste(proxy: &ClipsProxy<'_>) {
+    let conn = proxy.inner().connection();
+    let call = conn
+        .call_method(
+            Some("org.gnome.Shell"),
+            "/org/gnome/Shell/Extensions/GnomeClipsToggle",
+            Some("org.gnome.Shell.Extensions.GnomeClipsToggle"),
+            "InjectPaste",
+            &(),
+        )
+        .await;
+    if let Err(e) = call {
+        tracing::warn!(error = %e, "InjectPaste call failed");
     }
 }
