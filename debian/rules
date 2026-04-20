@@ -57,6 +57,8 @@ override_dh_auto_install:
 		debian/gnome-clips/usr/bin/gnome-clips
 	install -Dm644 dist/systemd/gnome-clips-daemon.packaged.service \
 		debian/gnome-clips/usr/lib/systemd/user/gnome-clips-daemon.service
+	install -Dm644 dist/xdg-autostart/gnome-clips.desktop \
+		debian/gnome-clips/etc/xdg/autostart/gnome-clips.desktop
 
 	# gnome-zones binary package — binaries plus bundled gtk4-layer-shell
 	install -Dm755 target/release/gnome-zones-daemon \
@@ -65,6 +67,8 @@ override_dh_auto_install:
 		debian/gnome-zones/usr/bin/gnome-zones
 	install -Dm644 dist/systemd/gnome-zones-daemon.packaged.service \
 		debian/gnome-zones/usr/lib/systemd/user/gnome-zones-daemon.service
+	install -Dm644 dist/xdg-autostart/gnome-zones.desktop \
+		debian/gnome-zones/etc/xdg/autostart/gnome-zones.desktop
 	install -d $(BUNDLED_LIBDIR)
 	cp -a $(LAYER_SHELL_STAGE)/lib/libgtk4-layer-shell.so.* \
 		$(BUNDLED_LIBDIR)/

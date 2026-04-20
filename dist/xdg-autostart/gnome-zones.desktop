@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=gnome-zones
+Comment=Window-zone layout manager (tray)
+Exec=/usr/bin/gnome-zones
+Icon=org.gnome.PowerToys.Zones
+Terminal=false
+StartupNotify=false
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-enabled=true

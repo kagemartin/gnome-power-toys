@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=gnome-clips
+Comment=Clipboard history manager (tray)
+Exec=/usr/bin/gnome-clips
+Icon=org.gnome.PowerToys.Clips
+Terminal=false
+StartupNotify=false
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-enabled=true
