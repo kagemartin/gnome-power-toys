@@ -20,8 +20,28 @@ pub struct Cli {
 
 pub fn build_app() -> gtk4::Application {
     libadwaita::init().expect("failed to init libadwaita");
-    gtk4::Application::builder()
+    let app = gtk4::Application::builder()
         .application_id(APP_ID)
         .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
-        .build()
+        .build();
+
+    let provider = gtk4::CssProvider::new();
+    provider.load_from_data(
+        ".gnome-zones-overlay { background: rgba(0, 0, 0, 0); }\n\
+         .gnome-zones-editor-backdrop { background: rgba(0, 0, 0, 0.85); }\n\
+         .gnome-zones-zone { background: rgba(60, 120, 220, 0.25); \
+           border: 2px solid rgba(120, 180, 255, 0.9); border-radius: 4px; }\n\
+         .gnome-zones-zone-selected { border: 2px solid rgba(255, 160, 40, 1.0); }\n\
+         .gnome-zones-zone-number { color: rgba(255, 255, 255, 0.9); \
+           font-size: 96pt; font-weight: bold; }\n",
+    );
+    if let Some(display) = gtk4::gdk::Display::default() {
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+
+    app
 }

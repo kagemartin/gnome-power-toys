@@ -1,6 +1,7 @@
 mod app;
 mod dbus;
 mod error;
+mod overlay;
 
 use clap::Parser;
 use gtk4::prelude::*;
