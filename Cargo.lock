@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "gnome-clips"
-version = "0.1.0"
+version = "0.3.1"
 dependencies = [
  "async-channel",
  "futures-util",
@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "gnome-clips-daemon"
-version = "0.1.0"
+version = "0.3.1"
 dependencies = [
  "dirs",
  "rusqlite",
@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "gnome-zones"
-version = "0.1.0"
+version = "0.3.1"
 dependencies = [
  "async-channel",
  "clap 4.6.1",
@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "gnome-zones-daemon"
-version = "0.1.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "dirs",
