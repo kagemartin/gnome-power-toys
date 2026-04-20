@@ -1,5 +1,6 @@
 [workspace]
 members = [
     "crates/gnome-zones-daemon",
+    "crates/gnome-zones",
 ]
 resolver = "2"
