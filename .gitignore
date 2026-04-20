@@ -38,6 +38,7 @@ target
 /debian/gnome-zones/
 /debian/gnome-power-toys/
 /debian/gnome-power-toys-extensions/
+/debian/staging-layer-shell/
 /debian/debhelper-build-stamp
 *.deb
 *.ddeb

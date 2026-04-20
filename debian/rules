@@ -2,8 +2,35 @@
 export DH_VERBOSE = 1
 export CARGO_HOME = $(CURDIR)/debian/cargo-home
 
+# Vendored gtk4-layer-shell: built from the third_party submodule and installed
+# into a private package libdir (/usr/lib/gnome-power-toys/). The gnome-zones
+# binaries use an $ORIGIN-relative RPATH to find it, so there is no external
+# runtime dep on libgtk4-layer-shell*.
+LAYER_SHELL_SRC   = third_party/gtk4-layer-shell
+LAYER_SHELL_BUILD = $(LAYER_SHELL_SRC)/_build
+LAYER_SHELL_STAGE = $(CURDIR)/debian/staging-layer-shell
+BUNDLED_LIBDIR    = debian/gnome-zones/usr/lib/gnome-power-toys
+
+export PKG_CONFIG_PATH := $(LAYER_SHELL_STAGE)/lib/pkgconfig
+export RUSTFLAGS := -C link-arg=-Wl,-rpath,$$ORIGIN/../lib/gnome-power-toys
+
 %:
 	dh $@
+
+override_dh_auto_configure:
+	@test -f $(LAYER_SHELL_SRC)/meson.build || { \
+	  echo "ERROR: $(LAYER_SHELL_SRC) is not populated." ; \
+	  echo "Run: git submodule update --init --recursive $(LAYER_SHELL_SRC)" ; \
+	  exit 1 ; \
+	}
+	meson setup $(LAYER_SHELL_BUILD) $(LAYER_SHELL_SRC) \
+	    --prefix=$(LAYER_SHELL_STAGE) \
+	    --libdir=lib \
+	    -Dexamples=false -Ddocs=false -Dtests=false \
+	    -Dsmoke-tests=false -Dvapi=false -Dintrospection=false \
+	    --buildtype=release
+	meson compile -C $(LAYER_SHELL_BUILD)
+	meson install -C $(LAYER_SHELL_BUILD)
 
 override_dh_auto_build:
 	cargo build --release --workspace
@@ -11,12 +38,16 @@ override_dh_auto_build:
 override_dh_auto_test:
 	cargo test --workspace
 
-# Some dev machines have libgtk4-layer-shell installed under /usr/local
-# (not from apt), which makes dpkg-shlibdeps fail to find a backing package.
-# The explicit Depends in debian/control covers the runtime requirement;
-# --ignore-missing-info lets the local build succeed regardless of layout.
+# Register the bundled libdir so dh_shlibdeps resolves libgtk4-layer-shell
+# to our private copy instead of an external package. The still-missing
+# shlibs mapping for that private lib is what --ignore-missing-info covers.
 override_dh_shlibdeps:
-	dh_shlibdeps -- --ignore-missing-info
+	dh_shlibdeps -l$(CURDIR)/$(BUNDLED_LIBDIR) -- --ignore-missing-info
+
+# Do not emit shlibs data for the bundled private lib — it is not meant to
+# satisfy other packages' dependencies.
+override_dh_makeshlibs:
+	dh_makeshlibs -Xusr/lib/gnome-power-toys
 
 override_dh_auto_install:
 	# gnome-clips binary package
@@ -29,7 +60,7 @@ override_dh_auto_install:
 	install -Dm644 dist/xdg-autostart/gnome-clips.desktop \
 		debian/gnome-clips/etc/xdg/autostart/gnome-clips.desktop
 
-	# gnome-zones binary package
+	# gnome-zones binary package — binaries plus bundled gtk4-layer-shell
 	install -Dm755 target/release/gnome-zones-daemon \
 		debian/gnome-zones/usr/bin/gnome-zones-daemon
 	install -Dm755 target/release/gnome-zones \
@@ -38,6 +69,9 @@ override_dh_auto_install:
 		debian/gnome-zones/usr/lib/systemd/user/gnome-zones-daemon.service
 	install -Dm644 dist/xdg-autostart/gnome-zones.desktop \
 		debian/gnome-zones/etc/xdg/autostart/gnome-zones.desktop
+	install -d $(BUNDLED_LIBDIR)
+	cp -a $(LAYER_SHELL_STAGE)/lib/libgtk4-layer-shell.so.* \
+		$(BUNDLED_LIBDIR)/
 
 	# gnome-power-toys-extensions binary package (Shell extensions)
 	# gnome-clips-toggle
