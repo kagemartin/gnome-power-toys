@@ -234,6 +234,10 @@ impl Indicator {
 
 impl Drop for Indicator {
     fn drop(&mut self) {
-        self.shutdown();
+        // `shutdown()` returns a ShutdownAwaiter we deliberately discard.
+        // The ksni service loop runs on the tokio runtime; it will actually
+        // drain and unregister from D-Bus when `main.rs` does `drop(rt)`
+        // after `application.run()` returns. No synchronous wait needed here.
+        let _ = self.handle.shutdown();
     }
 }
