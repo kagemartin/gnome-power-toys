@@ -15,6 +15,8 @@ pub struct ClipsInterface {
     pub db: Arc<Mutex<Database>>,
     /// Receives incognito state. `true` = incognito on.
     pub incognito: watch::Receiver<bool>,
+    /// Broadcasts incognito state changes to all subscribers.
+    pub incognito_tx: watch::Sender<bool>,
 }
 
 fn map_err(e: impl std::fmt::Display) -> zbus::fdo::Error {
@@ -111,6 +113,11 @@ impl ClipsInterface {
         *self.incognito.borrow()
     }
 
+    async fn set_incognito(&self, enabled: bool) -> zbus::fdo::Result<()> {
+        let _ = self.incognito_tx.send(enabled);
+        Ok(())
+    }
+
     #[zbus(signal)]
     pub async fn clip_added(ctx: &zbus::SignalContext<'_>, clip: ClipSummary) -> zbus::Result<()>;
 
@@ -136,10 +143,11 @@ mod tests {
         let f = NamedTempFile::new().unwrap();
         let db = Database::open(f.path()).unwrap();
         insert_clip(&db, b"hello", "text/plain", Some("hello"), Some("gedit")).unwrap();
-        let (_tx, rx) = watch::channel(false);
+        let (tx, rx) = watch::channel(false);
         ClipsInterface {
             db: Arc::new(Mutex::new(db)),
             incognito: rx,
+            incognito_tx: tx,
         }
     }
 

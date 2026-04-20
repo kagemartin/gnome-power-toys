@@ -19,11 +19,13 @@ pub enum DaemonEvent {
 pub async fn run_service(
     db: Arc<Mutex<Database>>,
     incognito_rx: watch::Receiver<bool>,
+    incognito_tx: watch::Sender<bool>,
     mut events: mpsc::Receiver<DaemonEvent>,
 ) -> Result<()> {
     let iface = ClipsInterface {
         db: db.clone(),
         incognito: incognito_rx,
+        incognito_tx,
     };
 
     let conn = ConnectionBuilder::session()?
