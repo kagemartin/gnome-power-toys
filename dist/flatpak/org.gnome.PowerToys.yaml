@@ -1,6 +1,6 @@
 id: org.gnome.PowerToys
 runtime: org.gnome.Platform
-runtime-version: '46'
+runtime-version: '50'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -8,6 +8,10 @@ sdk-extensions:
 # A multi-tool bundle has to pick one default for `flatpak run org.gnome.PowerToys`.
 # Clips is the default; each tool also has its own .desktop launcher.
 command: gnome-clips
+
+# Skip AppStream validation for now — icons are not yet shipped.
+# Re-enable once real icons land under /app/share/icons/.
+appstream-compose: false
 
 finish-args:
   - --share=ipc
@@ -32,6 +36,20 @@ build-options:
     CARGO_HOME: /run/build/gnome-power-toys/cargo
 
 modules:
+  # gtk4-layer-shell is not in the GNOME SDK — build it from source.
+  # Used by gnome-zones for its overlay / activator windows.
+  - name: gtk4-layer-shell
+    buildsystem: meson
+    config-opts:
+      - --libdir=lib
+      - -Dexamples=false
+      - -Ddocs=false
+      - -Dtests=false
+    sources:
+      - type: git
+        url: https://github.com/wmww/gtk4-layer-shell.git
+        tag: v1.3.0
+
   - name: gnome-power-toys
     buildsystem: simple
     build-commands:
