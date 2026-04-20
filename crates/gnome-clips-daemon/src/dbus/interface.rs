@@ -110,6 +110,18 @@ impl ClipsInterface {
     async fn is_incognito(&self) -> bool {
         *self.incognito.borrow()
     }
+
+    #[zbus(signal)]
+    pub async fn clip_added(ctx: &zbus::SignalContext<'_>, clip: ClipSummary) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn clip_deleted(ctx: &zbus::SignalContext<'_>, id: i64) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn clip_updated(ctx: &zbus::SignalContext<'_>, clip: ClipSummary) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn incognito_changed(ctx: &zbus::SignalContext<'_>, enabled: bool) -> zbus::Result<()>;
 }
 
 #[cfg(test)]
