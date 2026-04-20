@@ -43,14 +43,16 @@ export default class GnomeClipsToggleExtension extends Extension {
     }
 
     _activateUi() {
-        // Signature: Activate(a{sv} platform-data) → nothing.
-        const platformData = new GLib.Variant('a{sv}', {});
+        // Signature: Activate(a{sv} platform-data) → nothing. The
+        // `parameters` argument to DBus.call() must be a tuple Variant
+        // wrapping the method's argument list.
+        const parameters = new GLib.Variant('(a{sv})', [{}]);
         Gio.DBus.session.call(
             UI_BUS_NAME,
             UI_OBJECT_PATH,
             UI_IFACE,
             'Activate',
-            platformData,
+            parameters,
             null,
             Gio.DBusCallFlags.NONE,
             -1,
