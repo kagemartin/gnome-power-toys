@@ -3,6 +3,7 @@ mod dbus;
 mod error;
 mod panel;
 mod shortcut;
+mod util;
 
 use std::rc::Rc;
 

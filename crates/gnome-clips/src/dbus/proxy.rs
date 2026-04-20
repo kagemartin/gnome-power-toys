@@ -71,3 +71,74 @@ pub trait Clips {
     #[zbus(signal)]
     async fn incognito_changed(&self, enabled: bool) -> zbus::Result<()>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zbus::zvariant::{serialized::Context, to_bytes, Endian};
+
+    fn ctx() -> Context {
+        Context::new_dbus(Endian::Little, 0)
+    }
+
+    // These mirror the daemon's roundtrip tests: if the wire format ever
+    // drifts between daemon and UI, one of these will fail.
+
+    #[test]
+    fn clip_summary_roundtrips_over_dbus() {
+        let summary = ClipSummary {
+            id: 42,
+            content_type: "text/plain".into(),
+            preview: "hello".into(),
+            source_app: "gedit".into(),
+            created_at: 1_700_000_000,
+            pinned: true,
+            tags: vec!["work".into()],
+        };
+        let encoded = to_bytes(ctx(), &summary).unwrap();
+        let (decoded, _): (ClipSummary, _) = encoded.deserialize().unwrap();
+        assert_eq!(decoded.id, 42);
+        assert_eq!(decoded.content_type, "text/plain");
+        assert_eq!(decoded.preview, "hello");
+        assert_eq!(decoded.source_app, "gedit");
+        assert_eq!(decoded.created_at, 1_700_000_000);
+        assert!(decoded.pinned);
+        assert_eq!(decoded.tags, vec!["work"]);
+    }
+
+    #[test]
+    fn clip_detail_roundtrips_over_dbus() {
+        let detail = ClipDetail {
+            id: 1,
+            content_type: "image/png".into(),
+            preview: "[Image]".into(),
+            source_app: String::new(),
+            created_at: 1_700_000_001,
+            pinned: false,
+            tags: vec![],
+            content: vec![0x89, 0x50, 0x4e, 0x47],
+        };
+        let encoded = to_bytes(ctx(), &detail).unwrap();
+        let (decoded, _): (ClipDetail, _) = encoded.deserialize().unwrap();
+        assert_eq!(decoded.content, vec![0x89, 0x50, 0x4e, 0x47]);
+        assert_eq!(decoded.content_type, "image/png");
+        assert!(!decoded.pinned);
+    }
+
+    #[test]
+    fn clip_summary_empty_strings_and_tags_roundtrip() {
+        let summary = ClipSummary {
+            id: 0,
+            content_type: String::new(),
+            preview: String::new(),
+            source_app: String::new(),
+            created_at: 0,
+            pinned: false,
+            tags: vec![],
+        };
+        let encoded = to_bytes(ctx(), &summary).unwrap();
+        let (decoded, _): (ClipSummary, _) = encoded.deserialize().unwrap();
+        assert_eq!(decoded.id, 0);
+        assert!(decoded.tags.is_empty());
+    }
+}

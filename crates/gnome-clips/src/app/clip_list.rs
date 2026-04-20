@@ -3,6 +3,7 @@ use gtk4::{ListBox, ListBoxRow, ScrolledWindow, SelectionMode};
 
 use crate::app::clip_row::ClipRow;
 use crate::dbus::ClipSummary;
+use crate::util::sort_clips;
 
 // GObject qdata key — used to attach the clip id to each ListBoxRow so
 // selection/keyboard handlers can recover the id without maintaining a
@@ -41,10 +42,7 @@ impl ClipList {
             self.list_box.remove(&child);
         }
 
-        let mut sorted: Vec<&ClipSummary> = clips.iter().collect();
-        sorted.sort_by_key(|c| (!c.pinned, -c.created_at));
-
-        for clip in sorted {
+        for clip in sort_clips(clips) {
             self.append_clip(clip, on_delete.clone());
         }
     }

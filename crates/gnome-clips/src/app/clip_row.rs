@@ -2,6 +2,7 @@ use gtk4::prelude::*;
 use gtk4::{Box as GBox, Button, Label, Orientation};
 
 use crate::dbus::ClipSummary;
+use crate::util::{friendly_age, friendly_type, type_icon};
 
 pub struct ClipRow {
     pub container: GBox,
@@ -69,41 +70,3 @@ impl ClipRow {
     }
 }
 
-fn type_icon(mime: &str) -> &'static str {
-    match mime {
-        "text/plain" => "🔤",
-        "text/html" => "📋",
-        "text/markdown" => "📝",
-        "application/file" => "📄",
-        m if m.starts_with("image/") => "🖼️",
-        _ => "📋",
-    }
-}
-
-fn friendly_type(mime: &str) -> &'static str {
-    match mime {
-        "text/plain" => "Text",
-        "text/html" => "HTML",
-        "text/markdown" => "Markdown",
-        "application/file" => "File",
-        m if m.starts_with("image/") => "Image",
-        _ => "Clip",
-    }
-}
-
-fn friendly_age(created_at: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-    let secs = now - created_at;
-    if secs < 60 {
-        "just now".to_string()
-    } else if secs < 3600 {
-        format!("{} min ago", secs / 60)
-    } else if secs < 86400 {
-        format!("{} hr ago", secs / 3600)
-    } else {
-        format!("{} days ago", secs / 86400)
-    }
-}

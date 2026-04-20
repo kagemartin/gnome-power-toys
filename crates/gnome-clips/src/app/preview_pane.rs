@@ -2,6 +2,7 @@ use gtk4::prelude::*;
 use gtk4::{Box as GBox, Button, FlowBox, Label, Orientation, ScrolledWindow, TextBuffer, TextView};
 
 use crate::dbus::ClipDetail;
+use crate::util::friendly_age;
 
 pub struct PreviewPane {
     pub container: GBox,
@@ -124,19 +125,3 @@ impl PreviewPane {
     }
 }
 
-fn friendly_age(created_at: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-    let secs = now - created_at;
-    if secs < 60 {
-        "just now".to_string()
-    } else if secs < 3600 {
-        format!("{} min ago", secs / 60)
-    } else if secs < 86400 {
-        format!("{} hr ago", secs / 3600)
-    } else {
-        format!("{} days ago", secs / 86400)
-    }
-}

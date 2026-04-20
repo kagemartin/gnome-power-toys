@@ -1,6 +1,8 @@
 use gtk4::prelude::*;
 use gtk4::{Box as GBox, Entry, Orientation, ToggleButton};
 
+use crate::util::filter_for_state;
+
 #[derive(Clone)]
 pub struct FilterBar {
     pub container: GBox,
@@ -65,25 +67,14 @@ impl FilterBar {
 
     /// Returns the active D-Bus filter string (empty = all).
     pub fn active_filter(&self) -> &'static str {
-        if self.filter_pinned.is_active() {
-            return "pinned";
-        }
-        if self.filter_text.is_active() {
-            return "text/plain";
-        }
-        if self.filter_image.is_active() {
-            return "image/*";
-        }
-        if self.filter_file.is_active() {
-            return "application/file";
-        }
-        if self.filter_html.is_active() {
-            return "text/html";
-        }
-        if self.filter_markdown.is_active() {
-            return "text/markdown";
-        }
-        ""
+        filter_for_state(
+            self.filter_pinned.is_active(),
+            self.filter_text.is_active(),
+            self.filter_image.is_active(),
+            self.filter_file.is_active(),
+            self.filter_html.is_active(),
+            self.filter_markdown.is_active(),
+        )
     }
 }
 
