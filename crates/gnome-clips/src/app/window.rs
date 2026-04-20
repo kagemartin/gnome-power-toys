@@ -187,10 +187,15 @@ impl ClipsWindow {
                     match proxy.paste(id).await {
                         Ok(()) => tracing::info!(clip_id = id, "daemon paste ok"),
                         Err(e) => {
-                            tracing::warn!(error = %e, clip_id = id, "daemon paste failed")
+                            tracing::warn!(error = %e, clip_id = id, "daemon paste failed");
+                            return;
                         }
                     }
                     window.set_visible(false);
+                    // Ask the shell extension to re-focus the previously-
+                    // focused window and synthesize Shift+Insert so the
+                    // target app actually receives the paste.
+                    request_inject_paste().await;
                 });
             })
         };
@@ -324,5 +329,28 @@ impl ClipsWindow {
         } else {
             self.show();
         }
+    }
+}
+
+/// Call the gnome-clips-toggle shell extension's InjectPaste method,
+/// which refocuses the pre-popup window and synthesizes Shift+Insert.
+/// If the extension isn't installed/running the call fails quietly —
+/// the user can still manually Ctrl+V what's on the clipboard.
+async fn request_inject_paste() {
+    let Ok(conn) = zbus::Connection::session().await else {
+        tracing::warn!("could not connect to session bus for InjectPaste");
+        return;
+    };
+    let call = conn
+        .call_method(
+            Some("org.gnome.Shell"),
+            "/org/gnome/Shell/Extensions/GnomeClipsToggle",
+            Some("org.gnome.Shell.Extensions.GnomeClipsToggle"),
+            "InjectPaste",
+            &(),
+        )
+        .await;
+    if let Err(e) = call {
+        tracing::warn!(error = %e, "InjectPaste call failed");
     }
 }
