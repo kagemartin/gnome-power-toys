@@ -128,15 +128,33 @@ export default class GnomeZonesMoverExtension extends Extension {
             if (win.is_fullscreen()) {
                 win.unmake_fullscreen();
             }
-            // gnome-terminal (and other apps with size-hint increments)
-            // will *resize but not move* when called with a single
-            // `move_resize_frame(user_op=true, ...)` — the size-hint
-            // rounding path in mutter drops the move component.
-            // Tiling Assistant discovered the same bug and documents the
-            // workaround in its tilingWindowManager.js: move first, then
-            // combined move+resize. See
+
+            // Mirror Tiling Assistant's tile() sequence (see
             //   /usr/share/gnome-shell/extensions/tiling-assistant@ubuntu.com/
-            //     src/extension/tilingWindowManager.js:209-225
+            //     src/extension/tilingWindowManager.js:123-225
+            // ) which is known to work for size-hinted apps like
+            // gnome-terminal. The critical pieces beyond a plain
+            // move_resize_frame are:
+            //
+            //  1. `override_constraints(...)` — when present on mutter
+            //     (GNOME 46+), bypass the size-hint rounding path that
+            //     drops the move component.
+            //  2. `move_to_monitor(...)` — reset mutter's monitor-relative
+            //     state so the position isn't clamped back to the window's
+            //     previous monitor.
+            //  3. `move_frame` THEN `move_resize_frame` — establish
+            //     position first, then apply combined geometry. The
+            //     intermediate positioned state survives the size
+            //     negotiation.
+            if (win.override_constraints && Meta.WindowConstraint) {
+                win.override_constraints(
+                    Meta.WindowConstraint.WINDOW,
+                    Meta.WindowConstraint.WINDOW,
+                    Meta.WindowConstraint.WINDOW,
+                    Meta.WindowConstraint.WINDOW,
+                );
+            }
+            win.move_to_monitor(win.get_monitor());
             win.move_frame(true, x, y);
             win.move_resize_frame(true, x, y, w, h);
             return true;
