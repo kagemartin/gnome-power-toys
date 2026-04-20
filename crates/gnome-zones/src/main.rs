@@ -1,6 +1,7 @@
 mod activator;
 mod app;
 mod dbus;
+mod editor;
 mod error;
 mod overlay;
 
