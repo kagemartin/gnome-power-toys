@@ -22,7 +22,7 @@ impl From<&Zone> for ZoneWire {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Axis {
     /// Divider runs vertically (left zone sits to the left of right zone).
     Vertical,
@@ -237,6 +237,19 @@ impl EditorState {
     }
 
     /// Move a shared divider between two zones by a fractional delta.
+    ///
+    /// * `first_idx` — zone_index of the zone on the "smaller-coord" side of the divider.
+    /// * `second_idx` — zone_index of the zone on the "larger-coord" side.
+    /// * `axis` — orientation of the divider itself.
+    /// * `delta` — signed fractional offset: positive shrinks `first`, grows `second`.
+    ///
+    /// Clamps so neither zone collapses below `MIN_DIVIDER_GAP` (0.02).
+    ///
+    /// **Precondition:** the `(first_idx, second_idx, axis)` triple must correspond
+    /// to a current entry from [`shared_edges`] — i.e. the two zones must already
+    /// share a full edge. Calling this on non-adjacent zones will silently corrupt
+    /// geometry because the method only inspects the widths/positions of the two
+    /// targeted zones.
     pub fn move_divider(&mut self, first_idx: u32, second_idx: u32, axis: Axis, delta: f64) {
         const MIN_DIVIDER_GAP: f64 = 0.02;
         let Some(pa) = self.zones.iter().position(|z| z.zone_index == first_idx) else { return; };
@@ -353,10 +366,10 @@ mod tests {
             ],
         });
         s.renumber_row_major();
-        assert_eq!(s.zones[0].x, 0.0); assert_eq!(s.zones[0].y, 0.0);
-        assert_eq!(s.zones[1].x, 0.5); assert_eq!(s.zones[1].y, 0.0);
-        assert_eq!(s.zones[2].x, 0.0); assert_eq!(s.zones[2].y, 0.5);
-        assert_eq!(s.zones[3].x, 0.5); assert_eq!(s.zones[3].y, 0.5);
+        assert!((s.zones[0].x - 0.0).abs() < 1e-9); assert!((s.zones[0].y - 0.0).abs() < 1e-9);
+        assert!((s.zones[1].x - 0.5).abs() < 1e-9); assert!((s.zones[1].y - 0.0).abs() < 1e-9);
+        assert!((s.zones[2].x - 0.0).abs() < 1e-9); assert!((s.zones[2].y - 0.5).abs() < 1e-9);
+        assert!((s.zones[3].x - 0.5).abs() < 1e-9); assert!((s.zones[3].y - 0.5).abs() < 1e-9);
     }
 
     #[test]
@@ -377,8 +390,8 @@ mod tests {
         s.select(1);
         s.split_horizontal();
         assert_eq!(s.zones.len(), 3);
-        let top = s.zones.iter().find(|z| z.x == 0.0 && z.y == 0.0).unwrap();
-        let bot = s.zones.iter().find(|z| z.x == 0.0 && (z.y - 0.5).abs() < 1e-9).unwrap();
+        let top = s.zones.iter().find(|z| (z.x - 0.0).abs() < 1e-9 && (z.y - 0.0).abs() < 1e-9).unwrap();
+        let bot = s.zones.iter().find(|z| (z.x - 0.0).abs() < 1e-9 && (z.y - 0.5).abs() < 1e-9).unwrap();
         assert!((top.h - 0.5).abs() < 1e-9);
         assert!((bot.h - 0.5).abs() < 1e-9);
         assert!((top.w - 0.5).abs() < 1e-9);
@@ -391,7 +404,7 @@ mod tests {
         s.select(1);
         s.split_vertical();
         assert_eq!(s.zones.len(), 3);
-        let left = s.zones.iter().find(|z| z.x == 0.0).unwrap();
+        let left = s.zones.iter().find(|z| (z.x - 0.0).abs() < 1e-9).unwrap();
         let mid  = s.zones.iter().find(|z| (z.x - 0.25).abs() < 1e-9).unwrap();
         assert!((left.w - 0.25).abs() < 1e-9);
         assert!((mid.w  - 0.25).abs() < 1e-9);
@@ -476,7 +489,7 @@ mod tests {
     fn move_divider_vertical_between_columns() {
         let mut s = EditorState::from_layout(&two_col_layout());
         s.move_divider(1, 2, Axis::Vertical, -0.1);
-        let left  = s.zones.iter().find(|z| z.x == 0.0).unwrap();
+        let left  = s.zones.iter().find(|z| (z.x - 0.0).abs() < 1e-9).unwrap();
         let right = s.zones.iter().find(|z| (z.x - 0.4).abs() < 1e-9).unwrap();
         assert!((left.w - 0.4).abs() < 1e-9);
         assert!((right.w - 0.6).abs() < 1e-9);
@@ -485,11 +498,13 @@ mod tests {
     #[test]
     fn move_divider_clamps_at_edges() {
         let mut s = EditorState::from_layout(&two_col_layout());
+        // delta 0.6 would push divider past right edge; MIN_DIVIDER_GAP = 0.02 caps it.
         s.move_divider(1, 2, Axis::Vertical, 0.6);
-        let left  = s.zones.iter().find(|z| z.x == 0.0).unwrap();
+        let left  = s.zones.iter().find(|z| (z.x - 0.0).abs() < 1e-9).unwrap();
         let right = s.zones.iter().find(|z| z.x > 0.0).unwrap();
-        assert!(left.w > 0.0);
-        assert!(right.w > 0.0);
+        // Right zone clamped to exactly MIN_DIVIDER_GAP (0.02).
+        assert!((right.w - 0.02).abs() < 1e-9);
+        // Width invariant preserved.
         assert!((left.w + right.w - 1.0).abs() < 1e-9);
     }
 
@@ -508,13 +523,41 @@ mod tests {
         let s = EditorState::from_layout(&LayoutWire {
             id: 1, name: "t".into(), is_preset: false,
             zones: vec![
-                zw(1, 0.0, 0.0, 0.5, 0.5),
-                zw(2, 0.5, 0.0, 0.5, 0.5),
-                zw(3, 0.0, 0.5, 0.5, 0.5),
-                zw(4, 0.5, 0.5, 0.5, 0.5),
+                zw(1, 0.0, 0.0, 0.5, 0.5),  // TL
+                zw(2, 0.5, 0.0, 0.5, 0.5),  // TR
+                zw(3, 0.0, 0.5, 0.5, 0.5),  // BL
+                zw(4, 0.5, 0.5, 0.5, 0.5),  // BR
             ],
         });
-        let edges = s.shared_edges();
+        let edges: std::collections::HashSet<_> = s.shared_edges().into_iter().collect();
         assert_eq!(edges.len(), 4);
+        // Exact set: two vertical dividers (TL|TR, BL|BR), two horizontal (TL/BL, TR/BR).
+        assert!(edges.contains(&(1, 2, Axis::Vertical)));
+        assert!(edges.contains(&(3, 4, Axis::Vertical)));
+        assert!(edges.contains(&(1, 3, Axis::Horizontal)));
+        assert!(edges.contains(&(2, 4, Axis::Horizontal)));
+    }
+
+    #[test]
+    fn delete_chooses_larger_neighbor_by_area() {
+        // Three columns: narrow left (0.25) | narrow middle (0.25) | wide right (0.5).
+        // Delete middle — both left and right share its full vertical edge; right has the
+        // larger area (0.5 vs 0.25) and should absorb middle.
+        let mut s = EditorState::from_layout(&LayoutWire {
+            id: 1, name: "three".into(), is_preset: false,
+            zones: vec![
+                zw(1, 0.0,  0.0, 0.25, 1.0),  // left, area 0.25
+                zw(2, 0.25, 0.0, 0.25, 1.0),  // middle (to be deleted)
+                zw(3, 0.5,  0.0, 0.5,  1.0),  // right, area 0.5 — should win
+            ],
+        });
+        s.select(2);
+        s.delete_selected();
+        assert_eq!(s.zones.len(), 2);
+        // Right absorbed middle: its x now starts at 0.25 and w = 0.75.
+        let right = s.zones.iter().find(|z| (z.x - 0.25).abs() < 1e-9).unwrap();
+        assert!((right.w - 0.75).abs() < 1e-9);
+        let left = s.zones.iter().find(|z| (z.x - 0.0).abs() < 1e-9).unwrap();
+        assert!((left.w - 0.25).abs() < 1e-9);  // left unchanged
     }
 }
